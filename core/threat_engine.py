@@ -29,27 +29,46 @@ class ThreatEngine:
     # ------------------------------------------------------------------
 
     async def startup(self):
-        """Initialize DB and reload persisted threats into memory."""
-        await database.init_db()
-        rows = await database.load_all_threats()
-        for row in rows:
-            threat = Threat(
-                id=row["id"],
-                type=ThreatType(row["type"]),
-                description=row["description"],
-                severity=ThreatSeverity(row["severity"]),
-                source=row["source"],
-                module=row["module"],
-                status=ThreatStatus(row["status"]),
-                detected_at=row["detected_at"],
-                resolved_at=row["resolved_at"],
-                resolution_note=row["resolution_note"],
-                metadata=row["metadata"],
-                ai_analysis=row["ai_analysis"],
-                recommended_action=row["recommended_action"],
-            )
-            self.active_threats[threat.id] = threat
-        logger.info(f"📂 Loaded {len(rows)} threats from database")
+        """Reload persisted threats from DB into memory on startup."""
+        from core.database import AsyncSessionLocal
+        from sqlalchemy import select, text
+
+        try:
+            async with AsyncSessionLocal() as db:
+                # Use raw query for the old threats table (pre-SQLAlchemy)
+                result = await db.execute(
+                    text("SELECT * FROM threats ORDER BY detected_at DESC")
+                )
+                rows = result.mappings().all()
+
+            for row in rows:
+                import json
+                meta = row["metadata"]
+                if isinstance(meta, str):
+                    meta = json.loads(meta)
+                try:
+                    threat = Threat(
+                        id              = row["id"],
+                        type            = ThreatType(row["type"]),
+                        description     = row["description"],
+                        severity        = ThreatSeverity(row["severity"]),
+                        source          = row["source"],
+                        module          = row["module"],
+                        status          = ThreatStatus(row["status"]),
+                        detected_at     = row["detected_at"],
+                        resolved_at     = row["resolved_at"] or "",
+                        resolution_note = row["resolution_note"] or "",
+                        metadata        = meta,
+                        ai_analysis     = row["ai_analysis"] or "",
+                        recommended_action = row["recommended_action"] or "",
+                    )
+                    self.active_threats[threat.id] = threat
+                except Exception as e:
+                    logger.debug(f"Skipped threat row: {e}")
+
+            logger.info(f"📂 Loaded {len(self.active_threats)} threats from database")
+        except Exception as e:
+            logger.warning(f"Could not load threats on startup: {e}")
 
     # ------------------------------------------------------------------
     # Monitoring
@@ -106,7 +125,7 @@ class ThreatEngine:
     async def register_threat(self, threat: Threat):
         """Register a detected threat, persist it, and broadcast to all clients."""
         self.active_threats[threat.id] = threat
-        await database.save_threat(threat.to_dict())
+        await self._persist_threat(threat.to_dict())
         logger.warning(
             f"🚨 THREAT DETECTED: [{threat.type}] {threat.description} | Severity: {threat.severity}"
         )
@@ -125,8 +144,8 @@ class ThreatEngine:
         threat.resolved_at = datetime.utcnow().isoformat()
         threat.resolution_note = resolution_note
 
-        await database.update_threat_status(
-            threat_id, ThreatStatus.RESOLVED, threat.resolved_at, resolution_note
+        await self._update_threat_status(
+            threat_id, str(ThreatStatus.RESOLVED), threat.resolved_at, resolution_note
         )
 
         logger.info(f"✅ THREAT RESOLVED: {threat_id} — {resolution_note}")
@@ -138,6 +157,46 @@ class ThreatEngine:
             "timestamp": datetime.utcnow().isoformat()
         })
         return True
+
+    async def _persist_threat(self, t: dict):
+        """Upsert threat into the threats table."""
+        from core.database import AsyncSessionLocal
+        from sqlalchemy import text
+        import json
+        try:
+            async with AsyncSessionLocal() as db:
+                await db.execute(text("""
+                    INSERT INTO threats
+                        (id,type,description,severity,source,module,status,
+                         detected_at,resolved_at,resolution_note,metadata,
+                         ai_analysis,recommended_action)
+                    VALUES
+                        (:id,:type,:description,:severity,:source,:module,:status,
+                         :detected_at,:resolved_at,:resolution_note,:metadata,
+                         :ai_analysis,:recommended_action)
+                    ON CONFLICT (id) DO UPDATE SET
+                        status=EXCLUDED.status,
+                        resolved_at=EXCLUDED.resolved_at,
+                        resolution_note=EXCLUDED.resolution_note,
+                        ai_analysis=EXCLUDED.ai_analysis,
+                        recommended_action=EXCLUDED.recommended_action
+                """), {**t, "metadata": json.dumps(t.get("metadata", {}))})
+                await db.commit()
+        except Exception as e:
+            logger.error(f"Failed to persist threat {t.get('id')}: {e}")
+
+    async def _update_threat_status(self, threat_id: str, status: str, resolved_at: str, note: str):
+        """Update threat status in DB."""
+        from core.database import AsyncSessionLocal
+        from sqlalchemy import text
+        try:
+            async with AsyncSessionLocal() as db:
+                await db.execute(text(
+                    "UPDATE threats SET status=:s, resolved_at=:r, resolution_note=:n WHERE id=:id"
+                ), {"s": status, "r": resolved_at, "n": note, "id": threat_id})
+                await db.commit()
+        except Exception as e:
+            logger.error(f"Failed to update threat {threat_id}: {e}")
 
     async def auto_respond(self, threat: Threat):
         """Automatically respond to a threat based on its type and severity."""

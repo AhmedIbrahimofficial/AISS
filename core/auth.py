@@ -11,6 +11,7 @@ Config via .env:
 """
 
 import os
+import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -27,6 +28,18 @@ logger = setup_logger("auth")
 SECRET_KEY: str = os.environ.get("SECRET_KEY", "change-this-in-production-please")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+
+
+def create_refresh_token(data: dict) -> str:
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(days=7)
+    to_encode["exp"] = expire
+    to_encode["type"] = "refresh"
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def generate_email_token() -> str:
+    return secrets.token_urlsafe(32)
 
 # ── Password hashing ──────────────────────────────────────────────────
 
@@ -49,7 +62,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def verify_token(token: str) -> Optional[dict]:
+def verify_token(token: str, token_type: str = "access") -> Optional[dict]:
     """
     Decode and validate a JWT token.
     Returns the payload dict on success, None on failure.
@@ -57,6 +70,8 @@ def verify_token(token: str) -> Optional[dict]:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         if payload.get("sub") is None:
+            return None
+        if token_type == "refresh" and payload.get("type") != "refresh":
             return None
         return payload
     except JWTError:

@@ -100,19 +100,20 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 # ── Init — create all tables ──────────────────────────────────────────
 async def init_db():
     """
-    Create all tables defined in core/models.py if they don't exist.
-    Safe to call on every startup (CREATE TABLE IF NOT EXISTS).
+    Create all tables defined in core/models.py and auth/models.py.
+    Safe to call on every startup (checkfirst=True).
     """
     # Ensure logs/ directory exists for SQLite
     if IS_SQLITE:
         os.makedirs("logs", exist_ok=True)
 
+    # Import auth models so they register on Base.metadata before create_all
+    import auth.models  # noqa: F401
+
     async with engine.begin() as conn:
-        # Enable WAL mode for SQLite (better concurrent reads)
         if IS_SQLITE:
             await conn.execute(text("PRAGMA journal_mode=WAL"))
             await conn.execute(text("PRAGMA foreign_keys=ON"))
-
         await conn.run_sync(lambda c: Base.metadata.create_all(c, checkfirst=True))
 
     db_label = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else DATABASE_URL

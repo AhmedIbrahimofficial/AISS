@@ -36,6 +36,9 @@ async def resolve_threat(
 @router.delete("/clear")
 async def clear_all_threats(engine: ThreatEngine = Depends(get_engine_authenticated)):
     engine.active_threats.clear()
-    from core import database
-    await database.delete_all_threats()
+    from core.database import AsyncSessionLocal
+    from sqlalchemy import text
+    async with AsyncSessionLocal() as db:
+        await db.execute(text("DELETE FROM threats"))
+        await db.commit()
     return {"status": "cleared"}

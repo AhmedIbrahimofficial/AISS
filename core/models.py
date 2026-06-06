@@ -44,6 +44,12 @@ class User(Base):
                         nullable=False, default="viewer"
                       )
     is_active       = Column(Boolean, nullable=False, default=True)
+    is_verified          = Column(Boolean,     nullable=False, default=False)
+    email_verify_token   = Column(String(100), nullable=True)
+    email_verify_expires = Column(DateTime,    nullable=True)
+    reset_token          = Column(String(100), nullable=True)
+    reset_token_expires  = Column(DateTime,    nullable=True)
+    refresh_token_hash   = Column(String(255), nullable=True)
     login_attempts  = Column(Integer, nullable=False, default=0)
     locked_until    = Column(DateTime, nullable=True)
     created_at      = Column(DateTime, nullable=False, default=_now)
