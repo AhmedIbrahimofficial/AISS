@@ -1,5 +1,4 @@
-"""
-Cybersecurity - WebSocket Manager
+"""AISS - WebSocket Manager
 Handles real-time broadcasting of threats to all connected clients
 """
 

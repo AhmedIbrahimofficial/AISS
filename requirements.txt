@@ -14,4 +14,6 @@ sqlalchemy==2.0.36
 alembic==1.14.0
 argon2-cffi==23.1.0
 fastapi-mail==1.4.1
-requests==2.32.3
+psutil==6.1.0
+youtube-transcript-api==1.2.4
+rich>=13.8.0

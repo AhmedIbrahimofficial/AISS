@@ -1,4 +1,4 @@
-"""Cybersecurity - Authentication Routes with DB + Email Verification"""
+"""AISS - Authentication Routes with DB + Email Verification"""
 
 import os
 from datetime import datetime, timedelta

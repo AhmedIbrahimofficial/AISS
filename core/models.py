@@ -1,5 +1,4 @@
-"""
-Cybersecurity Platform — SQLAlchemy ORM Models
+"""AISS Platform — SQLAlchemy ORM Models
 Tables: users, threat_logs, blocked_ips, system_events, scan_results
 """
 

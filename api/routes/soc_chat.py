@@ -1,5 +1,4 @@
-"""
-Cybersecurity - AI SOC Assistant
+"""AISS - AI SOC Assistant
 Answers security questions about detected threats.
 """
 
@@ -17,7 +16,7 @@ logger = setup_logger("soc_chat")
 CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
 CLAUDE_MODEL   = "claude-sonnet-4-20250514"
 
-SOC_SYSTEM_PROMPT = """You are an AI SOC (Security Operations Center) Assistant for CyberSec Platform.
+SOC_SYSTEM_PROMPT = """You are an AI SOC (Security Operations Center) Assistant for AISS Platform.
 You help security analysts understand threats, CVEs, and mitigations.
 
 When answering:

@@ -1,5 +1,4 @@
-"""
-Cybersecurity - AI-Powered Threat Detection & Response Platform
+"""AISS - AI-Powered Threat Detection & Response Platform
 Main FastAPI Application Entry Point
 """
 
@@ -13,6 +12,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
+import asyncio
 import json
 import os
 import uvicorn
@@ -22,13 +22,25 @@ from api.routes import deception as deception_routes
 from api.routes import soc_chat as soc_chat_routes
 from api.routes import kill_chain as kill_chain_routes
 from api.routes import ai_firewall as ai_firewall_routes
-from auth.router import router as new_auth_router        # ← new auth system
+from api.routes import learning as learning_routes
+from api.routes import keyword_learning as keyword_learning_routes
+from auth.router import router as new_auth_router
 from core.websocket_manager import WebSocketManager
 from core.threat_engine import ThreatEngine
 from core.auth import verify_token
 from core.dependencies import init_services
 from core.database import init_db, close_db
 from utils.logger import setup_logger
+from modules.live_monitor import (
+    print_startup_box,
+    startup_box_loop,
+    live_threat_line,
+    live_resolve_line,
+    connection_scanner_loop,
+)
+from modules.self_test import self_test_loop
+from modules.usb_monitor import usb_monitor_loop
+from modules.system_monitor import system_monitor_loop
 
 logger = setup_logger("main")
 
@@ -42,10 +54,29 @@ threat_engine = ThreatEngine(ws_manager)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # ── Database + engine init ────────────────────────────────────────
     await init_db()
     await threat_engine.startup()
     init_services(threat_engine, ws_manager)
+
+    # ── Patch ThreatEngine to emit live feed lines ────────────────────
+    _orig_register = threat_engine.register_threat
+    _orig_resolve  = threat_engine.resolve_threat
+
+    async def _patched_register(threat):
+        await _orig_register(threat)
+        live_threat_line(threat.to_dict())
+
+    async def _patched_resolve(threat_id: str, resolution_note: str = ""):
+        result = await _orig_resolve(threat_id, resolution_note)
+        if result:
+            t = threat_engine.active_threats.get(threat_id)
+            t_type = t.type if t else "Unknown"
+            live_resolve_line(threat_id, str(t_type))
+        return result
+
+    threat_engine.register_threat = _patched_register
+    threat_engine.resolve_threat  = _patched_resolve
 
     # ── Deception Technology ──────────────────────────────────────────
     from modules.deception import (
@@ -72,15 +103,37 @@ async def lifespan(app: FastAPI):
     logger.info("🍯 Deception layer active — honeypots deployed")
     # ─────────────────────────────────────────────────────────────────
 
-    logger.info("🚀 Cybersecurity started — threat history loaded from database")
+    # ── Feature 1: Startup proof box + live updater ──────────────────
+    print_startup_box(threat_engine)
+    box_task      = asyncio.create_task(startup_box_loop(threat_engine))
+
+    # ── Feature 3: External connection scanner ───────────────────────
+    scanner_task  = asyncio.create_task(connection_scanner_loop(threat_engine))
+
+    # ── Feature 4: Self-Test Engine ───────────────────────────────────
+    selftest_task = asyncio.create_task(self_test_loop(threat_engine))
+
+    # ── Feature 5: USB Monitor ────────────────────────────────────────
+    usb_task      = asyncio.create_task(usb_monitor_loop(threat_engine))
+
+    # ── Feature 6: Full System Monitor ───────────────────────────────
+    sysmon_task   = asyncio.create_task(system_monitor_loop(threat_engine))
+
+    logger.info("🚀 AISS started — all systems active")
     yield
-    # Shutdown
+
+    # ── Shutdown ──────────────────────────────────────────────────────
+    box_task.cancel()
+    scanner_task.cancel()
+    selftest_task.cancel()
+    usb_task.cancel()
+    sysmon_task.cancel()
     await close_db()
-    logger.info("🔌 Cybersecurity shutdown complete")
+    logger.info("🔌 AISS shutdown complete")
 
 
 app = FastAPI(
-    title       = "Cybersecurity API",
+    title       = "AISS API",
     description = "AI-Powered Threat Detection & Response Platform",
     version     = "1.0.0",
     lifespan    = lifespan,
@@ -132,6 +185,8 @@ app.include_router(deception_routes.router,      prefix="/api",            tags=
 app.include_router(soc_chat_routes.router,       prefix="/api",            tags=["SOC Assistant"])
 app.include_router(kill_chain_routes.router,     prefix="/api",            tags=["Kill Chain"])
 app.include_router(ai_firewall_routes.router,    prefix="/api",            tags=["AI Firewall"])
+app.include_router(learning_routes.router,         prefix="/api/learn",         tags=["Self Learning"])
+app.include_router(keyword_learning_routes.router, prefix="/api/keyword-learn", tags=["Keyword Learning"])
 
 # Fake admin panel — no prefix, lives at /admin
 from modules.deception import get_fake_admin_router
@@ -202,7 +257,7 @@ async def favicon():
 @app.get("/")
 @limiter.limit("30/minute")
 async def root(request: Request):
-    return {"status": "Cybersecurity Online", "version": "1.0.0"}
+    return {"status": "AISS Online", "version": "1.0.0"}
 
 @app.get("/api/health")
 @limiter.limit("60/minute")
@@ -221,8 +276,15 @@ if __name__ == "__main__":
     with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as _s:
         if _s.connect_ex(("127.0.0.1", 8000)) == 0:
             print("\033[93m  ⚠  Port 8000 is already in use.\033[0m")
-            print("\033[93m  Another server instance may be running.\033[0m")
-            print("\033[97m  Stop it first or this instance will fail to bind.\033[0m")
-            input("  Press Enter to try anyway, or Ctrl+C to exit...")
+            print("\033[93m  Killing existing process and restarting...\033[0m")
+            import subprocess, sys
+            subprocess.call(
+                ["powershell", "-Command",
+                 "Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | "
+                 "ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            import time
+            time.sleep(1)
 
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)

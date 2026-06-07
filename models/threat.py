@@ -1,5 +1,4 @@
-"""
-Cybersecurity - Threat Model
+"""AISS - Threat Model
 Defines all threat types, severities, and the Threat dataclass
 """
 

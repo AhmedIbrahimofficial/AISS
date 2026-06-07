@@ -1,5 +1,4 @@
-"""
-Cybersecurity - FastAPI Dependencies
+"""AISS - FastAPI Dependencies
 Centralized dependency injection for engine, auth, db session, etc.
 Use these with FastAPI's Depends() instead of global set_engine() calls.
 """

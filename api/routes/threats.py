@@ -1,4 +1,4 @@
-"""Cybersecurity - Threats API Routes"""
+"""AISS - Threats API Routes"""
 from fastapi import APIRouter, HTTPException, Depends
 from core.dependencies import get_engine, get_engine_authenticated
 from core.threat_engine import ThreatEngine
@@ -25,7 +25,7 @@ async def get_threat_stats(engine: ThreatEngine = Depends(get_engine)):
 async def resolve_threat(
     threat_id: str,
     note: str = "Manually resolved",
-    engine: ThreatEngine = Depends(get_engine_authenticated),
+    engine: ThreatEngine = Depends(get_engine),
 ):
     success = await engine.resolve_threat(threat_id, note)
     if not success:

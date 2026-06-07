@@ -1,5 +1,4 @@
-"""
-Cybersecurity Platform — SQLAlchemy Async Database Layer
+"""AISS Platform — SQLAlchemy Async Database Layer
 
 Supports:
   - SQLite  (default, zero setup)     → sqlite+aiosqlite:///./logs/cybersecurity.db
@@ -115,6 +114,25 @@ async def init_db():
             await conn.execute(text("PRAGMA journal_mode=WAL"))
             await conn.execute(text("PRAGMA foreign_keys=ON"))
         await conn.run_sync(lambda c: Base.metadata.create_all(c, checkfirst=True))
+
+        # Create the raw threats table if it doesn't exist yet
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS threats (
+                id                 TEXT PRIMARY KEY,
+                type               TEXT NOT NULL,
+                description        TEXT NOT NULL,
+                severity           TEXT NOT NULL,
+                source             TEXT,
+                module             TEXT,
+                status             TEXT NOT NULL DEFAULT 'active',
+                detected_at        TEXT,
+                resolved_at        TEXT,
+                resolution_note    TEXT,
+                metadata           TEXT,
+                ai_analysis        TEXT,
+                recommended_action TEXT
+            )
+        """))
 
     db_label = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else DATABASE_URL
     logger.info(f"✅ Database ready [{('SQLite' if IS_SQLITE else 'PostgreSQL')}]: {db_label}")

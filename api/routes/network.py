@@ -1,4 +1,4 @@
-"""Cybersecurity - Network Monitor API Routes"""
+"""AISS - Network Monitor API Routes"""
 from fastapi import APIRouter
 
 router = APIRouter()

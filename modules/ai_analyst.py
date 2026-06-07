@@ -1,5 +1,4 @@
-"""
-Cybersecurity - AI Analyst Module
+"""AISS - AI Analyst Module
 Uses Claude API to deeply analyze threats and generate expert response recommendations.
 
 Rate limit handling:
@@ -27,7 +26,7 @@ _MAX_DELAY_S   = 3.0   # maximum pre-request delay (seconds)
 _MAX_RETRIES   = 3     # retries on 429
 _BACKOFF_BASE  = 1.0   # first retry wait (seconds); doubles each retry
 
-SYSTEM_PROMPT = """You are Cybersecurity's AI Security Analyst — an elite cybersecurity expert with deep knowledge of:
+SYSTEM_PROMPT = """You are AISS's AI Security Analyst — an elite cybersecurity expert with deep knowledge of:
 - Malware analysis (viruses, trojans, worms, ransomware, spyware, rootkits, botnets, cryptominers)
 - Network security (intrusion detection, DDoS, MITM, ARP spoofing, DNS attacks)
 - Threat intelligence and incident response
@@ -132,7 +131,7 @@ class AIAnalyst:
         Send a single threat to Claude for deep analysis.
         Applies 1–3s pre-request delay + exponential backoff on 429.
         """
-        prompt = f"""Analyze this cybersecurity threat detected by Cybersecurity Platform:
+        prompt = f"""Analyze this cybersecurity threat detected by AISS Platform:
 
 THREAT REPORT:
 - Type: {threat.type}

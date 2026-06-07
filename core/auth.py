@@ -1,5 +1,4 @@
-"""
-Cybersecurity - Auth Utility
+"""AISS - Auth Utility
 JWT token generation and verification for API + WebSocket security.
 
 Requires:
@@ -27,7 +26,7 @@ logger = setup_logger("auth")
 # ── Config ────────────────────────────────────────────────────────────
 SECRET_KEY: str = os.environ.get("SECRET_KEY", "change-this-in-production-please")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
 
 def create_refresh_token(data: dict) -> str:

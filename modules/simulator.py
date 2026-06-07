@@ -1,5 +1,4 @@
-"""
-Cybersecurity - Threat Simulator
+"""AISS - Threat Simulator
 Injects realistic fake threats for demo/testing purposes
 """
 
@@ -121,7 +120,7 @@ async def simulate_attack_wave(engine, count: int = 3, delay: float = 2.0):
 
 
 if __name__ == "__main__":
-    print("🎯 Cybersecurity Threat Simulator")
+    print("🎯 AISS Threat Simulator")
     print("Run this module from the main app context")
     print("Available threats:", len(SIMULATED_THREATS))
     for t in SIMULATED_THREATS:

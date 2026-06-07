@@ -1,4 +1,4 @@
-"""Cybersecurity - AI Analyst API Routes"""
+"""AISS - AI Analyst API Routes"""
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from core.dependencies import get_engine_authenticated

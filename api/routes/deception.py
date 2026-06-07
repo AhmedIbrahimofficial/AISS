@@ -1,4 +1,4 @@
-"""Cybersecurity - Deception / Honeypot Alert Routes"""
+"""AISS - Deception / Honeypot Alert Routes"""
 from fastapi import APIRouter, Depends
 from core.dependencies import get_engine
 from core.threat_engine import ThreatEngine

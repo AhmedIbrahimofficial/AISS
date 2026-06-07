@@ -1,4 +1,4 @@
-"""Cybersecurity - Logger Utility"""
+"""AISS - Logger Utility"""
 import logging
 import os
 import sys

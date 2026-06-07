@@ -1,4 +1,4 @@
-"""Cybersecurity - Scanner API Routes"""
+"""AISS - Scanner API Routes"""
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from core.dependencies import get_engine, get_engine_authenticated

@@ -1,5 +1,4 @@
-"""
-Cybersecurity - Cyber Kill Chain API
+"""AISS - Cyber Kill Chain API
 Maps detected threats to MITRE/Lockheed Martin kill chain stages.
 """
 
