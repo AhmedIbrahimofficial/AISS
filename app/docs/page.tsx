@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { useRef } from "react";
 import { motion } from "framer-motion";
 import { Terminal, BookOpen, Zap, Shield, Database, Lock, Monitor } from "lucide-react";
 
@@ -16,6 +17,21 @@ const SECTIONS = [
 export default function DocsPage() {
   const [active, setActive] = useState("quickstart");
 
+  const sectionRefs: Record<string, React.RefObject<HTMLElement>> = {
+    quickstart: useRef<HTMLElement>(null),
+    windows:    useRef<HTMLElement>(null),
+    linux:      useRef<HTMLElement>(null),
+    config:     useRef<HTMLElement>(null),
+    background: useRef<HTMLElement>(null),
+    api:        useRef<HTMLElement>(null),
+    auth:       useRef<HTMLElement>(null),
+  };
+
+  function scrollTo(id: string) {
+    setActive(id);
+    sectionRefs[id]?.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   return (
     <main className="bg-black min-h-screen pt-24 pb-20">
       <div className="max-w-6xl mx-auto px-6 flex gap-8">
@@ -27,7 +43,7 @@ export default function DocsPage() {
             {SECTIONS.map((s) => (
               <button
                 key={s.id}
-                onClick={() => setActive(s.id)}
+                onClick={() => scrollTo(s.id)}
                 className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-left transition-all ${
                   active === s.id
                     ? "bg-neon/10 text-neon border border-neon/20"
@@ -52,7 +68,7 @@ export default function DocsPage() {
           <div className="space-y-16">
 
             {/* ── QUICK START ── */}
-            <DocSection id="quickstart" title="⚡ Quick Start" active={active}>
+            <DocSection id="quickstart" title="⚡ Quick Start" active={active} sectionRef={sectionRefs.quickstart}>
 
               <div className="cyber-card p-5 border border-neon/20 mb-6">
                 <p className="text-neon text-xs font-bold uppercase tracking-widest mb-1">The AISS way</p>
@@ -96,7 +112,7 @@ export default function DocsPage() {
             </DocSection>
 
             {/* ── WINDOWS ── */}
-            <DocSection id="windows" title="🪟 Windows Setup (Full Guide)" active={active}>
+            <DocSection id="windows" title="🪟 Windows Setup (Full Guide)" active={active} sectionRef={sectionRefs.windows}>
 
               <Step label="1. Clone the repository">
                 <Code lang="cmd">{`git clone https://github.com/AhmedIbrahimofficial/aiss-backend.git\ncd aiss-backend`}</Code>
@@ -126,7 +142,7 @@ export default function DocsPage() {
             </DocSection>
 
             {/* ── LINUX ── */}
-            <DocSection id="linux" title="🐧 Linux / macOS Setup" active={active}>
+            <DocSection id="linux" title="🐧 Linux / macOS Setup" active={active} sectionRef={sectionRefs.linux}>
 
               <Step label="1. Clone the repository">
                 <Code lang="bash">{`git clone https://github.com/AhmedIbrahimofficial/aiss-backend.git\ncd aiss-backend`}</Code>
@@ -154,7 +170,7 @@ export default function DocsPage() {
             </DocSection>
 
             {/* ── CONFIG ── */}
-            <DocSection id="config" title="⚙️ Configuration (.env)" active={active}>
+            <DocSection id="config" title="⚙️ Configuration (.env)" active={active} sectionRef={sectionRefs.config}>
               <p className="text-white/50 text-sm mb-6">
                 AISS works out of the box with zero config — SQLite is used by default.
                 The <span className="text-neon font-mono">.env</span> file is auto-created on first run.
@@ -188,7 +204,7 @@ ANTHROPIC_API_KEY=sk-ant-...`}</Code>
             </DocSection>
 
             {/* ── BACKGROUND / PROD ── */}
-            <DocSection id="background" title="🚀 Background / Production" active={active}>
+            <DocSection id="background" title="🚀 Background / Production" active={active} sectionRef={sectionRefs.background}>
 
               <Step label="Windows — Keep running after terminal closes:">
                 <Code lang="cmd">{`# Run in PowerShell\nStart-Process python -ArgumentList "main.py" -NoNewWindow`}</Code>
@@ -208,7 +224,7 @@ ANTHROPIC_API_KEY=sk-ant-...`}</Code>
             </DocSection>
 
             {/* ── API ── */}
-            <DocSection id="api" title="📡 API Reference" active={active}>
+            <DocSection id="api" title="📡 API Reference" active={active} sectionRef={sectionRefs.api}>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm border-collapse">
                   <thead>
@@ -255,7 +271,7 @@ ANTHROPIC_API_KEY=sk-ant-...`}</Code>
             </DocSection>
 
             {/* ── AUTH ── */}
-            <DocSection id="auth" title="🔐 Authentication" active={active}>
+            <DocSection id="auth" title="🔐 Authentication" active={active} sectionRef={sectionRefs.auth}>
               <Step label="Register a new account:">
                 <Code lang="bash">{`curl -X POST http://localhost:8000/api/auth/register \\\n  -H "Content-Type: application/json" \\\n  -d '{"username":"ahmed","email":"ahmed@example.com","password":"SecurePass123!"}'`}</Code>
               </Step>
@@ -282,13 +298,14 @@ ANTHROPIC_API_KEY=sk-ant-...`}</Code>
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function DocSection({ id, title, children, active }: {
+function DocSection({ id, title, children, active, sectionRef }: {
   id: string; title: string; children: React.ReactNode; active: string;
+  sectionRef?: React.RefObject<HTMLElement>;
 }) {
   return (
-    <section id={id} className={active === id ? "" : "opacity-50"}>
-      <h2 className="text-2xl font-bold text-white mb-6 pb-3 border-b border-white/10">{title}</h2>
-      <div className="space-y-6">{children}</div>
+    <section id={id} ref={sectionRef} className="scroll-mt-28">
+      <h2 className={`text-2xl font-bold mb-6 pb-3 border-b border-white/10 transition-colors ${active === id ? "text-white" : "text-white/40"}`}>{title}</h2>
+      <div className={`space-y-6 transition-opacity ${active === id ? "opacity-100" : "opacity-40"}`}>{children}</div>
     </section>
   );
 }
