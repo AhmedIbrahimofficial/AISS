@@ -1,13 +1,8 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { clerkMiddleware } from "@clerk/nextjs/server";
 
-// Only dashboard requires auth — everything else is public
-const isProtected = createRouteMatcher(["/dashboard(.*)"]);
-
-export default clerkMiddleware(async (auth, req) => {
-  if (isProtected(req)) {
-    await auth.protect();
-  }
-});
+// Public middleware — no route protection
+// Dashboard is protected via page-level auth check instead
+export default clerkMiddleware();
 
 export const config = {
   matcher: [
