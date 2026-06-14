@@ -17,7 +17,7 @@ const SECTIONS = [
 export default function DocsPage() {
   const [active, setActive] = useState("quickstart");
 
-  const sectionRefs: Record<string, React.RefObject<HTMLElement>> = {
+  const sectionRefs: Record<string, React.RefObject<HTMLElement | null>> = {
     quickstart: useRef<HTMLElement>(null),
     windows:    useRef<HTMLElement>(null),
     linux:      useRef<HTMLElement>(null),
@@ -300,7 +300,7 @@ ANTHROPIC_API_KEY=sk-ant-...`}</Code>
 
 function DocSection({ id, title, children, active, sectionRef }: {
   id: string; title: string; children: React.ReactNode; active: string;
-  sectionRef?: React.RefObject<HTMLElement>;
+  sectionRef?: React.RefObject<HTMLElement | null>;
 }) {
   return (
     <section id={id} ref={sectionRef} className="scroll-mt-28">
