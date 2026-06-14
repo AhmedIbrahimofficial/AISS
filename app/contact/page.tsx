@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { Mail, Globe, ExternalLink, MessageSquare, Send } from "lucide-react";
 
 const CONTACT_ITEMS = [
-  { icon: Mail,          label: "Email",   value: "contact@aiss.dev",                        href: "mailto:funandentertainmentwithus@gmail.com" },
+  { icon: Mail,          label: "Email",   value: "funandentertainmentwithus@gmail.com",      href: "mailto:funandentertainmentwithus@gmail.com" },
   { icon: ExternalLink,  label: "GitHub",  value: "AhmedIbrahimofficial",                    href: "https://github.com/AhmedIbrahimofficial" },
   { icon: Globe,         label: "API Docs",value: "localhost:8000/docs",                      href: "/docs" }
 ];
