@@ -30,6 +30,8 @@ logs/
 
 # ── Sensitive / generated data ────────────────────────────────────────
 data/learned_patterns.json
+data/dataset_patterns.json
+datasets/
 admin_passwords.txt
 fake_credentials.txt
 fake_api_keys.txt

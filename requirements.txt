@@ -17,3 +17,4 @@ fastapi-mail==1.4.1
 psutil==6.1.0
 youtube-transcript-api==1.2.4
 rich>=13.8.0
+pandas==2.2.0

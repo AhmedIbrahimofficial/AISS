@@ -32,6 +32,7 @@ except ImportError:
 
 from models.threat import Threat, ThreatType, ThreatSeverity
 from utils.logger import setup_logger
+from modules.dataset_loader import dataset_loader
 
 logger = setup_logger("network_monitor")
 
@@ -156,6 +157,23 @@ class NetworkMonitor:
                          "suspicious_port": rport}
                     )
                     _reported_conns.add(conn_key)
+
+                # ── Dataset-driven: check connection count anomaly ────
+                conn_count = len(_connection_graph[rip])
+                if dataset_loader.is_network_anomaly("count", conn_count):
+                    anomaly_key = f"dataset_count:{rip}"
+                    if anomaly_key not in _reported_conns:
+                        threshold = dataset_loader.get_network_threshold("count")
+                        await self._report(
+                            ThreatType.PORT_SCAN, ThreatSeverity.HIGH,
+                            f"Dataset anomaly: {rip} has {conn_count} connections "
+                            f"(normal max: {threshold.get('alert_above', '?')})",
+                            rip,
+                            {"remote_ip": rip, "conn_count": conn_count,
+                             "dataset_threshold": threshold,
+                             "detection": "dataset_driven"}
+                        )
+                        _reported_conns.add(anomaly_key)
 
                 # Check connection velocity (too many connections from same IP)
                 vel_key = f"velocity:{rip}"

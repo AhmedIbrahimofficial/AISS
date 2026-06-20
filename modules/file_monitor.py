@@ -26,6 +26,7 @@ from datetime import datetime
 
 from models.threat import Threat, ThreatType, ThreatSeverity
 from utils.logger import setup_logger
+from modules.dataset_loader import dataset_loader
 
 logger = setup_logger("file_monitor")
 
@@ -411,10 +412,12 @@ class FileMonitor:
             pass
 
     async def _scan_script_content(self, filepath: str) -> None:
-        """Scan script file content for malicious patterns."""
+        """Scan script file content for malicious patterns and phishing URLs."""
         try:
             with open(filepath, "r", errors="ignore") as f:
                 content = f.read(50000)
+
+            # ── Malicious pattern check ───────────────────────────────
             for pattern in MALICIOUS_PATTERNS:
                 if pattern.search(content):
                     key = f"script:{filepath}"
@@ -429,6 +432,25 @@ class FileMonitor:
                         )
                         _reported_files.add(key)
                     return
+
+            # ── Dataset-driven phishing URL detection ─────────────────
+            import re as _re
+            urls_found = _re.findall(r'https?://[^\s\'"<>]+', content)
+            for url in urls_found[:20]:  # check first 20 URLs only
+                score = dataset_loader.score_url(url)
+                if score >= 0.5:  # 50%+ phishing score
+                    key = f"phishing_url:{filepath}:{url[:60]}"
+                    if key not in _reported_files:
+                        await self._report(
+                            ThreatType.SUSPICIOUS_FILE, ThreatSeverity.HIGH,
+                            f"High-risk URL in script (score={score:.0%}): {url[:80]}",
+                            filepath,
+                            {"url": url[:200], "phishing_score": round(score, 3),
+                             "path": filepath, "detection": "dataset_driven"}
+                        )
+                        _reported_files.add(key)
+                    break
+
         except Exception:
             pass
 

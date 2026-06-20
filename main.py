@@ -24,6 +24,8 @@ from api.routes import kill_chain as kill_chain_routes
 from api.routes import ai_firewall as ai_firewall_routes
 from api.routes import learning as learning_routes
 from api.routes import keyword_learning as keyword_learning_routes
+from api.routes import dataset as dataset_routes
+from api.routes import system_health as system_health_routes
 from auth.router import router as new_auth_router
 from core.websocket_manager import WebSocketManager
 from core.threat_engine import ThreatEngine
@@ -58,6 +60,30 @@ async def lifespan(app: FastAPI):
     await init_db()
     await threat_engine.startup()
     init_services(threat_engine, ws_manager)
+
+    # ── Dataset patterns load (non-blocking) ─────────────────────────
+    from modules.dataset_loader import dataset_loader
+    from pathlib import Path
+    import asyncio as _asyncio
+
+    async def _load_datasets_bg():
+        """Load datasets in background so startup is not delayed."""
+        try:
+            datasets_exist = any(Path("datasets").glob("*.csv"))
+            patterns_exist = Path("data/dataset_patterns.json").exists()
+            if datasets_exist and not patterns_exist:
+                # First run — load and compute thresholds
+                logger.info("📊 Dataset patterns not found — computing from CSVs...")
+                loop = _asyncio.get_event_loop()
+                await loop.run_in_executor(None, dataset_loader.load_all_datasets)
+                logger.info("📊 Dataset patterns computed and saved")
+            elif patterns_exist:
+                logger.info(f"📊 Dataset patterns loaded "
+                            f"({dataset_loader.patterns.get('total_rows_processed', 0)} rows)")
+        except Exception as e:
+            logger.warning(f"📊 Dataset load skipped: {e}")
+
+    _asyncio.create_task(_load_datasets_bg())
 
     # ── Patch ThreatEngine to emit live feed lines ────────────────────
     _orig_register = threat_engine.register_threat
@@ -187,6 +213,8 @@ app.include_router(kill_chain_routes.router,     prefix="/api",            tags=
 app.include_router(ai_firewall_routes.router,    prefix="/api",            tags=["AI Firewall"])
 app.include_router(learning_routes.router,         prefix="/api/learn",         tags=["Self Learning"])
 app.include_router(keyword_learning_routes.router, prefix="/api/keyword-learn", tags=["Keyword Learning"])
+app.include_router(dataset_routes.router,          prefix="/api/dataset",        tags=["Datasets"])
+app.include_router(system_health_routes.router,    prefix="/api/system",         tags=["System Health"])
 
 # Fake admin panel — no prefix, lives at /admin
 from modules.deception import get_fake_admin_router
