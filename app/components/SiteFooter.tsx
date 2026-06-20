@@ -15,6 +15,7 @@ export default function SiteFooter() {
           © 2026 AISS Platform. All rights reserved.
         </p>
         <div className="flex gap-6 text-sm text-white/40">
+          <Link href="/monitor"    className="hover:text-neon transition-colors">Monitor</Link>
           <Link href="/features"   className="hover:text-neon transition-colors">Features</Link>
           <Link href="/docs"       className="hover:text-neon transition-colors">Docs</Link>
           <Link href="/contact"    className="hover:text-neon transition-colors">Contact</Link>

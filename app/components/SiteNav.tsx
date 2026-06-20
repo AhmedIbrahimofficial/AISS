@@ -6,6 +6,7 @@ import { SignInButton, SignUpButton, UserButton, useAuth } from "@clerk/nextjs";
 
 const LINKS = [
   { label: "Home",       href: "/"           },
+  { label: "Monitor",    href: "/monitor"    },
   { label: "Features",   href: "/features"   },
   { label: "About",      href: "/about"      },
   { label: "Kill Chain", href: "/kill-chain" },
