@@ -35,14 +35,11 @@ from core.database import init_db, close_db
 from utils.logger import setup_logger
 from modules.live_monitor import (
     print_startup_box,
-    startup_box_loop,
     live_threat_line,
     live_resolve_line,
-    connection_scanner_loop,
 )
 from modules.self_test import self_test_loop
 from modules.usb_monitor import usb_monitor_loop
-from modules.system_monitor import system_monitor_loop
 
 logger = setup_logger("main")
 
@@ -129,31 +126,21 @@ async def lifespan(app: FastAPI):
     logger.info("🍯 Deception layer active — honeypots deployed")
     # ─────────────────────────────────────────────────────────────────
 
-    # ── Feature 1: Startup proof box + live updater ──────────────────
+    # ── Feature 1: Startup proof box (minimal, no loop) ────────────
     print_startup_box(threat_engine)
-    box_task      = asyncio.create_task(startup_box_loop(threat_engine))
 
-    # ── Feature 3: External connection scanner ───────────────────────
-    scanner_task  = asyncio.create_task(connection_scanner_loop(threat_engine))
-
-    # ── Feature 4: Self-Test Engine ───────────────────────────────────
+    # ── Background tasks (only essential ones) ───────────────────────
+    # scanner_task removed — high CPU usage, psutil per-process scan
     selftest_task = asyncio.create_task(self_test_loop(threat_engine))
-
-    # ── Feature 5: USB Monitor ────────────────────────────────────────
     usb_task      = asyncio.create_task(usb_monitor_loop(threat_engine))
-
-    # ── Feature 6: Full System Monitor ───────────────────────────────
-    sysmon_task   = asyncio.create_task(system_monitor_loop(threat_engine))
+    # sysmon removed — covered by /api/system/health endpoint polling
 
     logger.info("🚀 AISS started — all systems active")
     yield
 
     # ── Shutdown ──────────────────────────────────────────────────────
-    box_task.cancel()
-    scanner_task.cancel()
     selftest_task.cancel()
     usb_task.cancel()
-    sysmon_task.cancel()
     await close_db()
     logger.info("🔌 AISS shutdown complete")
 
@@ -275,6 +262,30 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
         logger.info(f"WS disconnected: user={user}")
+
+
+@app.websocket("/ws/monitor")
+async def websocket_monitor(websocket: WebSocket):
+    """
+    Public read-only WebSocket for the local dashboard.
+    No auth required — only broadcasts threat events, no control.
+    Only accessible from localhost.
+    """
+    client_host = websocket.client.host if websocket.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+    ws_manager.active_connections.append(websocket)
+    await websocket.send_text(json.dumps({"status": "connected", "mode": "monitor"}))
+
+    try:
+        while True:
+            # Keep alive — just receive pings
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
 
 
 # ── Basic routes ──────────────────────────────────────────────────────

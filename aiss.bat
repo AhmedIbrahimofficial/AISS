@@ -1,14 +1,10 @@
 @echo off
-:: AISS Global Launcher
-:: Kisi bhi terminal se "aiss" type karo — backend khud start ho jata hai
-
+:: AISS Global Launcher — type "aiss" from anywhere to start
 set "AISS_DIR=d:\aiss\aiss backend"
 
 if not exist "%AISS_DIR%\main.py" (
-    echo [AISS] ERROR: main.py not found at "%AISS_DIR%"
-    echo [AISS] Check that the backend folder exists.
-    pause
-    exit /b 1
+    echo [AISS] ERROR: Backend not found at %AISS_DIR%
+    pause & exit /b 1
 )
 
 cd /d "%AISS_DIR%"
