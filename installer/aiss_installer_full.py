@@ -17,9 +17,45 @@ APP_FULL  = "AISS — AI Integrated Security System"
 PUBLISHER = "Ahmed Ibrahim"
 YEAR      = "2026"
 EXE_DIR   = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
-ZIP_PATH  = EXE_DIR / "AISS_v2.0_Windows_Portable.zip"
 ICON_PATH = EXE_DIR / "aiss.ico"
 DEFAULT_INSTALL = Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "AISS"
+
+# Magic marker used when ZIP is embedded inside the EXE
+_MAGIC = b"AISS_ZIP_START_MARKER_8675309"
+
+def _get_zip_path():
+    """Return Path to ZIP — either embedded in EXE or alongside it."""
+    import struct, io
+
+    # 1. Check if ZIP is embedded in our own exe
+    exe = Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__)
+    try:
+        data = exe.read_bytes()
+        idx  = data.rfind(_MAGIC)
+        if idx != -1:
+            size_start = idx + len(_MAGIC)
+            zip_size   = struct.unpack("<Q", data[size_start:size_start + 8])[0]
+            zip_start  = size_start + 8
+            zip_bytes  = data[zip_start:zip_start + zip_size]
+            # Write to temp file so zipfile can use it
+            import tempfile
+            tmp = Path(tempfile.mkdtemp()) / "aiss_bundle.zip"
+            tmp.write_bytes(zip_bytes)
+            return tmp
+    except Exception:
+        pass
+
+    # 2. Look for ZIP file alongside the exe
+    for candidate in [
+        EXE_DIR / "AISS_v2.0_Windows_Portable.zip",
+        EXE_DIR / "aiss_bundle.zip",
+    ]:
+        if candidate.exists():
+            return candidate
+
+    return None
+
+ZIP_PATH = _get_zip_path() or (EXE_DIR / "AISS_v2.0_Windows_Portable.zip")
 
 # ── Colors ─────────────────────────────────────────────────────────────
 BG     = "#070d0b"
