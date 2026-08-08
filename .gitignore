@@ -1,0 +1,17 @@
+node_modules/ 
+.next/ 
+__pycache__/ 
+*.pyc 
+.env
+.env.*
+.env.local 
+venv/ 
+data/ 
+logs/ 
+
+# Build artifacts — too large for GitHub
+installer/output/*.zip
+installer/output/*.exe
+installer/output/_build/
+aiss backend/dist/
+aiss backend/build/

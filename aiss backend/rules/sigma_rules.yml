@@ -1,0 +1,99 @@
+title: Suspicious PowerShell Encoded Command
+status: stable
+description: Detects PowerShell execution with base64-encoded commands
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        CommandLine|contains:
+            - '-enc '
+            - '-EncodedCommand'
+            - 'powershell -w hidden'
+    condition: selection
+falsepositives:
+    - Legitimate admin scripts
+level: high
+tags:
+    - attack.execution
+    - attack.t1059.001
+
+---
+title: Mimikatz-Style Process Access
+status: stable
+description: Detects potential credential dumping via lsass access
+logsource:
+    category: process_access
+    product: windows
+detection:
+    selection:
+        TargetImage|endswith: '\lsass.exe'
+        GrantedAccess:
+            - '0x1010'
+            - '0x1410'
+    condition: selection
+falsepositives:
+    - AV/EDR tools
+level: critical
+tags:
+    - attack.credential_access
+    - attack.t1003.001
+
+---
+title: New Service Created
+status: stable
+description: Detects creation of new Windows services (persistence mechanism)
+logsource:
+    product: windows
+    service: system
+detection:
+    selection:
+        EventID: 7045
+        ImagePath|contains:
+            - '\Temp\'
+            - '\AppData\'
+            - 'powershell'
+    condition: selection
+falsepositives:
+    - Legitimate software installs
+level: medium
+tags:
+    - attack.persistence
+    - attack.t1543.003
+
+---
+title: Brute Force Authentication
+status: stable
+description: Multiple failed login attempts indicating brute force
+logsource:
+    product: windows
+    service: security
+detection:
+    selection:
+        EventID: 4625
+    timeframe: 1m
+    condition: selection | count() > 5
+falsepositives:
+    - Misconfigured services
+level: high
+tags:
+    - attack.credential_access
+    - attack.t1110
+
+---
+title: DNS Tunneling Indicators
+status: experimental
+description: Detects unusually high DNS query volume (tunneling)
+logsource:
+    category: dns
+detection:
+    selection:
+        query|re: '[a-zA-Z0-9]{30,}\.'
+    timeframe: 1m
+    condition: selection | count() > 50
+falsepositives:
+    - CDN lookups
+level: high
+tags:
+    - attack.exfiltration
+    - attack.t1048.001

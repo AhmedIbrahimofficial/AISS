@@ -1,0 +1,26 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# AISS — Development & Testing Requirements
+# Install: pip install -r requirements.txt -r requirements-dev.txt
+# ═══════════════════════════════════════════════════════════════════════════════
+
+-r requirements.txt
+
+# ── Testing ───────────────────────────────────────────────────────────
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==6.1.0
+pytest-mock==3.14.0
+pytest-httpx==0.35.0
+httpx==0.28.1
+Faker==40.36.0
+
+# ── Code Quality ──────────────────────────────────────────────────────
+black==25.1.0
+ruff==0.12.0
+mypy==1.16.0
+bandit==1.8.3
+safety==3.5.2
+
+# ── Local Dev Utilities ───────────────────────────────────────────────
+watchfiles==1.2.0
+ipython==9.3.0
