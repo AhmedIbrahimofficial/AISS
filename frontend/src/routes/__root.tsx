@@ -203,16 +203,21 @@ function AppWithWS() {
     if (authChecked) return;
     setAuthChecked(true);
 
-    const isLoginPage = location.pathname === "/login";
-    if (isLoginPage) return;
+    const isLoginPage      = location.pathname === "/login";
+    const isOnboardingPage = location.pathname === "/onboarding";
+    if (isLoginPage || isOnboardingPage) return;
 
-    const existing = getToken();
-    if (existing) {
-      connectWS();
+    // First-time user → show onboarding
+    const onboardingDone = localStorage.getItem("aiss_onboarding_done");
+    if (!onboardingDone) {
+      void navigate({ to: "/onboarding" });
       return;
     }
 
-    // Try silent auto-login with default credentials
+    const existing = getToken();
+    if (existing) { connectWS(); return; }
+
+    // Try silent auto-login
     const BASE = (import.meta.env.VITE_AISS_API_URL as string | undefined) ?? "http://localhost:8000";
     const tryLogin = async (email: string, pass: string) => {
       try {
@@ -233,12 +238,7 @@ function AppWithWS() {
     };
 
     tryLogin("admin@aiss.local", "Admin123!")
-      .then((ok) => {
-        if (!ok) {
-          // Backend up but no default user — redirect to login
-          void navigate({ to: "/login" });
-        }
-      })
+      .then((ok) => { if (!ok) void navigate({ to: "/login" }); })
       .catch(() => {});
   }, [authChecked, location.pathname, navigate]);
 
@@ -252,9 +252,10 @@ function AppWithWS() {
     if (connected) setTimeout(() => startMonitoring(), 800);
   }, [connected, startMonitoring]);
 
-  const isLoginPage = location.pathname === "/login";
+  const isLoginPage      = location.pathname === "/login";
+  const isOnboardingPage = location.pathname === "/onboarding";
 
-  if (isLoginPage) return <Outlet />;
+  if (isLoginPage || isOnboardingPage) return <Outlet />;
 
   return (
     <>

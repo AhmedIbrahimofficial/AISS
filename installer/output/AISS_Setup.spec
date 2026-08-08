@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['d:\\aiss\\installer\\output\\_aiss_installer.py'],
+    ['d:\\aiss\\installer\\aiss_installer_full.py'],
     pathex=[],
     binaries=[],
     datas=[],

@@ -32,6 +32,7 @@ import { Route as LogsRouteImport } from './routes/logs'
 import { Route as MalwareAnalysisRouteImport } from './routes/malware-analysis'
 import { Route as NetworkRouteImport } from './routes/network'
 import { Route as NetworkMonitorRouteImport } from './routes/network-monitor'
+import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as PlaybooksRouteImport } from './routes/playbooks'
 import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as SandboxRouteImport } from './routes/sandbox'
@@ -163,6 +164,11 @@ const NetworkMonitorRoute = NetworkMonitorRouteImport.update({
   path: '/network-monitor',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PlaybooksRoute = PlaybooksRouteImport.update({
   id: '/playbooks',
   path: '/playbooks',
@@ -263,6 +269,7 @@ export interface FileRoutesByFullPath {
   '/malware-analysis': typeof MalwareAnalysisRoute
   '/network': typeof NetworkRoute
   '/network-monitor': typeof NetworkMonitorRoute
+  '/onboarding': typeof OnboardingRoute
   '/playbooks': typeof PlaybooksRoute
   '/reports': typeof ReportsRoute
   '/sandbox': typeof SandboxRoute
@@ -303,6 +310,7 @@ export interface FileRoutesByTo {
   '/malware-analysis': typeof MalwareAnalysisRoute
   '/network': typeof NetworkRoute
   '/network-monitor': typeof NetworkMonitorRoute
+  '/onboarding': typeof OnboardingRoute
   '/playbooks': typeof PlaybooksRoute
   '/reports': typeof ReportsRoute
   '/sandbox': typeof SandboxRoute
@@ -344,6 +352,7 @@ export interface FileRoutesById {
   '/malware-analysis': typeof MalwareAnalysisRoute
   '/network': typeof NetworkRoute
   '/network-monitor': typeof NetworkMonitorRoute
+  '/onboarding': typeof OnboardingRoute
   '/playbooks': typeof PlaybooksRoute
   '/reports': typeof ReportsRoute
   '/sandbox': typeof SandboxRoute
@@ -386,6 +395,7 @@ export interface FileRouteTypes {
     | '/malware-analysis'
     | '/network'
     | '/network-monitor'
+    | '/onboarding'
     | '/playbooks'
     | '/reports'
     | '/sandbox'
@@ -426,6 +436,7 @@ export interface FileRouteTypes {
     | '/malware-analysis'
     | '/network'
     | '/network-monitor'
+    | '/onboarding'
     | '/playbooks'
     | '/reports'
     | '/sandbox'
@@ -466,6 +477,7 @@ export interface FileRouteTypes {
     | '/malware-analysis'
     | '/network'
     | '/network-monitor'
+    | '/onboarding'
     | '/playbooks'
     | '/reports'
     | '/sandbox'
@@ -507,6 +519,7 @@ export interface RootRouteChildren {
   MalwareAnalysisRoute: typeof MalwareAnalysisRoute
   NetworkRoute: typeof NetworkRoute
   NetworkMonitorRoute: typeof NetworkMonitorRoute
+  OnboardingRoute: typeof OnboardingRoute
   PlaybooksRoute: typeof PlaybooksRoute
   ReportsRoute: typeof ReportsRoute
   SandboxRoute: typeof SandboxRoute
@@ -687,6 +700,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof NetworkMonitorRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/onboarding': {
+      id: '/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof OnboardingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/playbooks': {
       id: '/playbooks'
       path: '/playbooks'
@@ -819,6 +839,7 @@ const rootRouteChildren: RootRouteChildren = {
   MalwareAnalysisRoute: MalwareAnalysisRoute,
   NetworkRoute: NetworkRoute,
   NetworkMonitorRoute: NetworkMonitorRoute,
+  OnboardingRoute: OnboardingRoute,
   PlaybooksRoute: PlaybooksRoute,
   ReportsRoute: ReportsRoute,
   SandboxRoute: SandboxRoute,
