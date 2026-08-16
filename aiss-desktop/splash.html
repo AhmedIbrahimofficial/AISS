@@ -1,0 +1,53 @@
+ecuri<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: rgba(11,18,32,0.97);
+    font-family: 'Segoe UI', sans-serif;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    height: 100vh; overflow: hidden;
+    border: 1px solid rgba(0,214,143,0.3);
+    border-radius: 16px;
+  }
+  .logo {
+    font-size: 48px; font-weight: 900; letter-spacing: 8px;
+    background: linear-gradient(135deg, #00d68f, #00a8ff);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  .tagline {
+    color: rgba(255,255,255,0.4); font-size: 12px;
+    letter-spacing: 4px; text-transform: uppercase; margin-top: 8px;
+  }
+  .bar-container {
+    width: 280px; height: 3px;
+    background: rgba(255,255,255,0.08); border-radius: 2px;
+    margin-top: 40px; overflow: hidden;
+  }
+  .bar {
+    height: 100%; width: 0%; background: linear-gradient(90deg,#00d68f,#00a8ff);
+    border-radius: 2px; animation: load 1.8s ease-in-out forwards;
+  }
+  .status {
+    color: rgba(0,214,143,0.6); font-size: 11px;
+    letter-spacing: 2px; margin-top: 14px;
+    animation: blink 1s ease-in-out infinite;
+  }
+  .shield { font-size: 32px; margin-bottom: 16px; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
+  @keyframes load { 0%{width:0%} 100%{width:100%} }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+</style>
+</head>
+<body>
+  <div class="shield">🛡️</div>
+  <div class="logo">AISS</div>
+  <div class="tagline">AI Security Intelligence System</div>
+  <div class="bar-container"><div class="bar"></div></div>
+  <div class="status">INITIALIZING SECURITY MODULES...</div>
+</body>
+</html>
