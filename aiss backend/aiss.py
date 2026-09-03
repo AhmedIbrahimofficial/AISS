@@ -1201,6 +1201,160 @@ def register_global_command():
 
 
 # ─────────────────────────────────────────────────────────────────────
+# FIRST-RUN KEY PROMPT  (shown BEFORE installation begins)
+# ─────────────────────────────────────────────────────────────────────
+
+def _prompt_first_run_keys():
+    """
+    Collect API keys upfront — shown immediately after the banner,
+    before any pip install or setup step runs.
+
+    Only prompts when:
+      - .env does not exist yet, OR
+      - OPENROUTER_API_KEY is still empty in .env
+
+    Saved keys are written into .env before installation proceeds.
+    """
+    env_file = SCRIPT_DIR / ".env"
+
+    # Already configured → skip silently
+    if env_file.exists():
+        text = env_file.read_text(encoding="utf-8", errors="ignore")
+        has_key = bool(re.search(r"^OPENROUTER_API_KEY=\S+", text, re.M))
+        if has_key:
+            return
+
+    # ── Draw the key-collection box ───────────────────────────────────
+    if _UNICODE:
+        T, B, S, M = ("╔" + "═"*58 + "╗",
+                      "╚" + "═"*58 + "╝",
+                      "║",
+                      "╠" + "═"*58 + "╣")
+    else:
+        T, B, S, M = ("+", "+", "|", "+")
+
+    print(f"\n  {clr(T, CYAN, BOLD)}")
+    print(f"  {clr(S, CYAN)}  {clr('AISS  —  First-Time Setup', WHITE, BOLD):<59}{clr(S, CYAN)}")
+    print(f"  {clr(S, CYAN)}  {clr('Configure your keys before installation begins.', DIM):<59}{clr(S, CYAN)}")
+    print(f"  {clr(M, CYAN)}")
+    print(f"  {clr(S, CYAN)}  {clr('REQUIRED  (for AI features):', YELLOW, BOLD):<59}{clr(S, CYAN)}")
+    print(f"  {clr(S, CYAN)}  {clr('  OpenRouter API key  →  https://openrouter.ai/keys', WHITE):<59}{clr(S, CYAN)}")
+    print(f"  {clr(S, CYAN)}  {clr('  Free tier available. One key enables Claude + GPT-4 + Gemini', DIM):<59}{clr(S, CYAN)}")
+    print(f"  {clr(M, CYAN)}")
+    print(f"  {clr(S, CYAN)}  {clr('OPTIONAL  (press Enter to skip each):', CYAN):<59}{clr(S, CYAN)}")
+    print(f"  {clr(S, CYAN)}  {clr('  VirusTotal key  →  virustotal.com/gui/my-apikey', DIM):<59}{clr(S, CYAN)}")
+    print(f"  {clr(S, CYAN)}  {clr('  Alert URL       →  ntfy://ntfy.sh/topic  or discord://...', DIM):<59}{clr(S, CYAN)}")
+    print(f"  {clr(B, CYAN, BOLD)}\n")
+
+    collected: dict = {}
+
+    # ── [1/3] OpenRouter ──────────────────────────────────────────────
+    print(f"  {clr('[1/3]', MAGENTA, BOLD)} {clr('OpenRouter API Key', WHITE, BOLD)}")
+    print(f"        {clr('Put your OpenRouter API key here to run AI on the system', YELLOW)}")
+    print(f"        {clr('Format: sk-or-v1-...   |   Get free: https://openrouter.ai/keys', DIM)}")
+    print(f"        {clr('Press Enter to skip — AI features will be disabled until added', DIM)}")
+    try:
+        import getpass as _gp
+        val = _gp.getpass(f"\n        {clr('OPENROUTER_API_KEY', BOLD)}: ").strip()
+    except Exception:
+        val = input(f"\n        {clr('OPENROUTER_API_KEY', BOLD)}: ").strip()
+
+    if val:
+        collected["OPENROUTER_API_KEY"] = val
+        ok(f"OpenRouter key saved  {clr('→ AI agent + all LLM features enabled', GREEN)}")
+    else:
+        warn("Skipped — AI features disabled. Add OPENROUTER_API_KEY to .env to enable.")
+
+    print()
+
+    # ── [2/3] VirusTotal ──────────────────────────────────────────────
+    print(f"  {clr('[2/3]', MAGENTA, BOLD)} {clr('VirusTotal API Key', WHITE, BOLD)} "
+          f"{clr('(optional)', DIM)}")
+    print(f"        {clr('Enables file / IP / hash reputation checks.', DIM)}")
+    print(f"        {clr('Free at: https://virustotal.com/gui/my-apikey', CYAN)}")
+    try:
+        import getpass as _gp
+        vt = _gp.getpass(
+            f"        {clr('VIRUSTOTAL_API_KEY', BOLD)} (hidden — Enter to skip): "
+        ).strip()
+    except Exception:
+        vt = input(
+            f"        {clr('VIRUSTOTAL_API_KEY', BOLD)} (Enter to skip): "
+        ).strip()
+
+    if vt:
+        collected["VIRUSTOTAL_API_KEY"] = vt
+        ok("VirusTotal key saved")
+    else:
+        skip("Skipped — threat enrichment uses local analysis only")
+
+    print()
+
+    # ── [3/3] Alert channel ───────────────────────────────────────────
+    print(f"  {clr('[3/3]', MAGENTA, BOLD)} {clr('Alert Channel URL', WHITE, BOLD)} "
+          f"{clr('(optional)', DIM)}")
+    print(f"        {clr('Push notifications for HIGH/CRITICAL threats on any device.', DIM)}")
+    print(f"        {clr('Examples:', DIM)}")
+    print(f"        {clr('  ntfy://ntfy.sh/my-topic      ← 100% free, no signup', DIM)}")
+    print(f"        {clr('  discord://webhook-id/token', DIM)}")
+    print(f"        {clr('  slack://tokenA/tokenB/tokenC/channel', DIM)}")
+    try:
+        alert = input(
+            f"        {clr('APPRISE_URLS', BOLD)} (Enter to skip): "
+        ).strip()
+    except (KeyboardInterrupt, EOFError):
+        alert = ""
+
+    if alert:
+        collected["APPRISE_URLS"] = alert
+        ok("Alert channel saved")
+    else:
+        skip("Skipped — no push alerts configured")
+
+    if not collected:
+        print()
+        info("No keys entered — you can add them later by editing  aiss backend/.env")
+        print()
+        return
+
+    # ── Persist into .env ─────────────────────────────────────────────
+    if env_file.exists():
+        lines = env_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+    elif (SCRIPT_DIR / ".env.example").exists():
+        lines = (SCRIPT_DIR / ".env.example").read_text(
+            encoding="utf-8", errors="ignore"
+        ).splitlines()
+    else:
+        lines = []
+
+    updated: set = set()
+    new_lines: list = []
+    for line in lines:
+        if "=" in line and not line.strip().startswith("#"):
+            k = line.split("=", 1)[0].strip()
+            if k in collected:
+                new_lines.append(f"{k}={collected[k]}")
+                updated.add(k)
+                continue
+        new_lines.append(line)
+
+    # Append any keys that weren't already in the template
+    for k, v in collected.items():
+        if k not in updated:
+            new_lines.append(f"{k}={v}")
+
+    env_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    try:
+        if not IS_WIN:
+            env_file.chmod(0o600)
+    except Exception:
+        pass
+
+    print(f"\n  {clr('Keys saved to .env', GREEN, BOLD)}")
+    print(f"  {clr('Starting installation ...', DIM)}\n")
+
+
+# ─────────────────────────────────────────────────────────────────────
 # MAIN ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────
 
@@ -1211,6 +1365,12 @@ def main():
 
     # Always show banner
     banner()
+
+    # ── FIRST: collect API keys before any install step ───────────────
+    # Only prompts when OPENROUTER_API_KEY is missing from .env.
+    # Silent no-op if already configured.
+    if "--no-wizard" not in sys.argv:
+        _prompt_first_run_keys()
 
     if first_run or "--install" in sys.argv or "--reinstall" in sys.argv:
         mode = "FIRST RUN — Full Installation"
