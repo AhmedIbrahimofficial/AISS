@@ -1,8 +1,9 @@
 @echo off
 :: AISS PATH Setup
 :: Run this ONCE as Administrator to make "aiss" available in any terminal
+:: Alternatively, run:  aiss --setup
 
-set "AISS_DIR=d:\aiss\aiss backend"
+set "AISS_DIR=d:\aiss"
 
 echo.
 echo   +==========================================+
@@ -20,12 +21,17 @@ if %errorlevel% equ 0 (
     exit /b 0
 )
 
-:: Add to system PATH permanently (requires admin)
-echo   [>>] Adding AISS to system PATH...
-setx PATH "%PATH%;%AISS_DIR%" /M >nul 2>&1
-if %errorlevel% neq 0 (
-    echo   [!] System PATH failed. Trying user PATH instead...
-    setx PATH "%PATH%;%AISS_DIR%" >nul 2>&1
+:: Also set AISS_HOME for scripts that need it
+setx AISS_HOME "%AISS_DIR%" >nul 2>&1
+
+:: Add to user PATH permanently (HKCU\Environment\Path)
+for /f "tokens=2*" %%a in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "CURRENT_PATH=%%b"
+echo %CURRENT_PATH% | findstr /i /c:"%AISS_DIR%" >nul 2>&1
+if %errorlevel% equ 0 (
+    echo   [OK] AISS directory already in user PATH.
+) else (
+    echo   [>>] Adding AISS to user PATH...
+    setx Path "%CURRENT_PATH%;%AISS_DIR%" >nul 2>&1
     if %errorlevel% neq 0 (
         echo   [ERROR] Could not add to PATH automatically.
         echo.
@@ -36,8 +42,6 @@ if %errorlevel% neq 0 (
         exit /b 1
     )
     echo   [OK] Added to USER PATH successfully.
-) else (
-    echo   [OK] Added to SYSTEM PATH successfully.
 )
 
 echo.

@@ -10,8 +10,10 @@ import {
   connectWS, disconnectWS, onWSEvent, sendWSMessage, getToken,
   getHealth, getSystemHealth, getActiveThreats, getThreatStats,
   getThreats, resolveThreat, getAgents, getAgentStats,
-  getTopologyMap, enrichIP, llmAnalyze, socChat, triggerScan,
-  getLibraries, getLLMProviders, getWizardQuestions,
+  getTopologyMap, enrichIP, llmAnalyze, socChat, socChatV2, triggerScan,
+  getLibraries, getLLMProviders, getWizardQuestions, getUsers,
+  getSecurityTasks, getSecurityTask, cancelSecurityTask,
+  startSecurityScan, startEicarTest, verifyPipeline,
   type Threat, type WizardQuestion,
 } from "@/lib/api";
 
@@ -177,6 +179,17 @@ export function useLLMProviders() {
   });
 }
 
+// ── Users ──────────────────────────────────────────────────────────────
+
+export function useUsers() {
+  return useQuery({
+    queryKey:       ["users"],
+    queryFn:        getUsers,
+    refetchInterval: 30_000,
+    staleTime:       10_000,
+  });
+}
+
 // ── Agents ────────────────────────────────────────────────────────────
 
 export function useAgents() {
@@ -261,6 +274,45 @@ export function useSOCChat() {
   return { messages, loading, send };
 }
 
+// ── AI Console (ChatGPT-style) ───────────────────────────────────────
+
+interface AIMessage {
+  role: "user" | "ai";
+  text: string;
+  tool_calls?: Array<{ tool: string; args: Record<string, unknown>; result: Record<string, unknown> }>;
+}
+
+export function useAIConsole() {
+  const [messages, setMessages] = useState<AIMessage[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  const send = useCallback(async (text: string) => {
+    const history = messages.map((m) => ({
+      role: m.role === "user" ? "user" : "assistant",
+      text: m.text,
+    }));
+
+    setMessages((m) => [...m, { role: "user", text }]);
+    setLoading(true);
+    try {
+      const r = await socChatV2(text, history);
+      setMessages((m) => [...m, {
+        role: "ai",
+        text: r.response,
+        tool_calls: r.tool_calls,
+      }]);
+    } catch (e) {
+      setMessages((m) => [...m, { role: "ai", text: `Error: ${String(e)}` }]);
+    } finally {
+      setLoading(false);
+    }
+  }, [messages]);
+
+  const clear = useCallback(() => setMessages([]), []);
+
+  return { messages, loading, send, clear };
+}
+
 // ── Wizard ────────────────────────────────────────────────────────────
 
 export function useWizard() {
@@ -268,5 +320,70 @@ export function useWizard() {
     queryKey: ["wizard"],
     queryFn:  getWizardQuestions,
     staleTime: 30_000,
+  });
+}
+
+// ── Security Orchestrator (Scan Tasks) ──────────────────────────────
+
+export function useSecurityTasks(limit = 50) {
+  return useQuery({
+    queryKey:       ["security-tasks", limit],
+    queryFn:        () => getSecurityTasks(limit),
+    refetchInterval: 5_000,
+    select:         (d) => d.data,
+  });
+}
+
+export function useSecurityTask(taskId: string | null) {
+  return useQuery({
+    queryKey:       ["security-task", taskId],
+    queryFn:        () => getSecurityTask(taskId!),
+    enabled:        !!taskId,
+    refetchInterval: 3_000,
+    select:         (d) => d.data,
+  });
+}
+
+export function useCancelSecurityTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (taskId: string) => cancelSecurityTask(taskId),
+    onSuccess:  () => {
+      void qc.invalidateQueries({ queryKey: ["security-tasks"] });
+      toast.success("Scan task cancellation requested");
+    },
+    onError: (e) => toast.error(`Cancel failed: ${String(e)}`),
+  });
+}
+
+export function useStartSecurityScan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (opts: { description?: string; target_dirs?: string[]; eicar_test?: boolean } = {}) =>
+      startSecurityScan(opts),
+    onSuccess: (data) => {
+      void qc.invalidateQueries({ queryKey: ["security-tasks"] });
+      toast.success("Security scan started", { description: `Task ID: ${data.task_id.slice(0, 8)}` });
+    },
+    onError: (e) => toast.error(`Scan failed: ${String(e)}`),
+  });
+}
+
+export function useStartEicarTest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: startEicarTest,
+    onSuccess: (data) => {
+      void qc.invalidateQueries({ queryKey: ["security-tasks"] });
+      toast.success("EICAR test started", { description: `Task ID: ${data.task_id.slice(0, 8)}` });
+    },
+    onError: (e) => toast.error(`EICAR test failed: ${String(e)}`),
+  });
+}
+
+export function useVerifyPipeline() {
+  return useMutation({
+    mutationFn: verifyPipeline,
+    onError:    (e) => toast.error(`Pipeline verification failed: ${String(e)}`),
   });
 }

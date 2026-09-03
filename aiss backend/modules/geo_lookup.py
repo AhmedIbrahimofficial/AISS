@@ -24,6 +24,59 @@ _reader = None
 _db_available = False
 
 
+def _auto_download_db() -> bool:
+    """
+    Auto-download GeoLite2-City.mmdb from MaxMind if MAXMIND_LICENSE_KEY is set
+    and the database file does not already exist.
+    Returns True if download succeeded.
+    """
+    license_key = os.environ.get("MAXMIND_LICENSE_KEY", "").strip()
+    if not license_key:
+        return False
+    if os.path.exists(GEOIP_DB_PATH):
+        return True  # already have it
+
+    import urllib.request
+    import gzip
+    import shutil
+
+    os.makedirs(os.path.dirname(GEOIP_DB_PATH), exist_ok=True)
+    url = (
+        f"https://download.maxmind.com/app/geoip_download"
+        f"?edition_id=GeoLite2-City&license_key={license_key}&suffix=tar.gz"
+    )
+    logger.info("Downloading GeoLite2-City.mmdb from MaxMind (auto-download)...")
+    try:
+        tmp_path = GEOIP_DB_PATH + ".tmp.tar.gz"
+        urllib.request.urlretrieve(url, tmp_path)
+
+        # Extract .mmdb from .tar.gz
+        import tarfile
+        with tarfile.open(tmp_path, "r:gz") as tf:
+            for member in tf.getmembers():
+                if member.name.endswith("GeoLite2-City.mmdb"):
+                    member_file = tf.extractfile(member)
+                    if member_file:
+                        with open(GEOIP_DB_PATH, "wb") as out:
+                            shutil.copyfileobj(member_file, out)
+                        break
+            else:
+                logger.error("GeoLite2-City.mmdb not found inside archive")
+                return False
+
+        # Clean up temp file
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+        logger.info(f"✅ GeoLite2-City.mmdb downloaded to {GEOIP_DB_PATH}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to auto-download GeoLite2-City.mmdb: {e}")
+        return False
+
+
 def _get_reader():
     """Lazy-load the GeoIP2 reader. Returns None if DB not available."""
     global _reader, _db_available
@@ -33,6 +86,10 @@ def _get_reader():
     if _db_available is False and _reader is None:
         # Already tried and failed — don't re-try on every call
         pass
+
+    # Try auto-download if DB missing and license key is set
+    if not os.path.exists(GEOIP_DB_PATH):
+        _auto_download_db()
 
     if not os.path.exists(GEOIP_DB_PATH):
         if not hasattr(_get_reader, "_warned"):

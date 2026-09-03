@@ -3,7 +3,7 @@ import {
   Outlet, Link, createRootRouteWithContext,
   useRouter, HeadContent, Scripts, useNavigate, useLocation,
 } from "@tanstack/react-router";
-import { useEffect, useState, useCallback, type ReactNode } from "react";
+import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import appCss from "../styles.css?url";
@@ -12,7 +12,10 @@ import { AppShell } from "../components/soc/AppShell";
 import { Toaster } from "@/components/ui/sonner";
 import { SetupWizard, PopupQuestion } from "@/components/soc/SetupWizard";
 import { useWebSocket, useBackendStatus } from "@/hooks/useAISS";
-import { connectWS, getToken, login, setToken, type WizardQuestion } from "@/lib/api";
+import {
+  connectWS, disconnectWS, getToken, setToken, silentRefresh, type WizardQuestion,
+} from "@/lib/api";
+import { trySSO } from "@/lib/sso";
 import { Shield, X, AlertTriangle, Info, CheckCircle, Lock } from "lucide-react";
 
 // ── 404 ───────────────────────────────────────────────────────────────
@@ -58,48 +61,39 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   );
 }
 
-// ── Permission Toast / Action Popup ──────────────────────────────────
+// ── Action confirm modal ──────────────────────────────────────────────
 type PermissionLevel = "info" | "warning" | "critical" | "success";
-
 interface ActionConfirm {
-  title:       string;
-  description: string;
-  level:       PermissionLevel;
-  onConfirm:   () => void;
-  onCancel:    () => void;
+  title: string; description: string; level: PermissionLevel;
+  onConfirm: () => void; onCancel: () => void;
 }
 
 function ActionConfirmModal({ confirm }: { confirm: ActionConfirm }) {
   const icons = {
-    info:     <Info     className="size-5 text-[var(--cyan)]" />,
+    info:     <Info className="size-5 text-[var(--cyan)]" />,
     warning:  <AlertTriangle className="size-5 text-[var(--warning)]" />,
-    critical: <Lock     className="size-5 text-[var(--critical)]" />,
+    critical: <Lock className="size-5 text-[var(--critical)]" />,
     success:  <CheckCircle className="size-5 text-[var(--success)]" />,
   };
   const colors = {
-    info:     "border-[var(--cyan)]/30 bg-[var(--cyan)]/5",
-    warning:  "border-[var(--warning)]/30 bg-[var(--warning)]/5",
+    info: "border-[var(--cyan)]/30 bg-[var(--cyan)]/5",
+    warning: "border-[var(--warning)]/30 bg-[var(--warning)]/5",
     critical: "border-[var(--critical)]/30 bg-[var(--critical)]/5",
-    success:  "border-[var(--success)]/30 bg-[var(--success)]/5",
+    success: "border-[var(--success)]/30 bg-[var(--success)]/5",
   };
   const btnColors = {
-    info:     "border-[var(--cyan)]/40 bg-[var(--cyan)]/10 text-[var(--cyan)] hover:bg-[var(--cyan)]/20",
-    warning:  "border-[var(--warning)]/40 bg-[var(--warning)]/10 text-[var(--warning)] hover:bg-[var(--warning)]/20",
+    info: "border-[var(--cyan)]/40 bg-[var(--cyan)]/10 text-[var(--cyan)] hover:bg-[var(--cyan)]/20",
+    warning: "border-[var(--warning)]/40 bg-[var(--warning)]/10 text-[var(--warning)] hover:bg-[var(--warning)]/20",
     critical: "border-[var(--critical)]/40 bg-[var(--critical)]/10 text-[var(--critical)] hover:bg-[var(--critical)]/20",
-    success:  "border-[var(--success)]/40 bg-[var(--success)]/10 text-[var(--success)] hover:bg-[var(--success)]/20",
+    success: "border-[var(--success)]/40 bg-[var(--success)]/10 text-[var(--success)] hover:bg-[var(--success)]/20",
   };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Backdrop */}
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={confirm.onCancel} />
-
       <div className={`relative w-full max-w-sm rounded-xl border p-6 shadow-2xl ${colors[confirm.level]} bg-[#0d1a15]`}>
-        <button onClick={confirm.onCancel}
-          className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground hover:text-foreground">
+        <button onClick={confirm.onCancel} className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground hover:text-foreground">
           <X className="size-4" />
         </button>
-
         <div className="mb-4 flex items-center gap-3">
           {icons[confirm.level]}
           <div>
@@ -109,26 +103,17 @@ function ActionConfirmModal({ confirm }: { confirm: ActionConfirm }) {
             </p>
           </div>
         </div>
-
-        <p className="text-sm text-muted-foreground leading-relaxed mb-5">
-          {confirm.description}
-        </p>
-
+        <p className="text-sm text-muted-foreground leading-relaxed mb-5">{confirm.description}</p>
         <div className="flex gap-2">
-          <button
-            onClick={confirm.onConfirm}
-            className={`flex-1 rounded-lg border px-4 py-2 text-sm font-semibold transition-colors ${btnColors[confirm.level]}`}
-          >
+          <button onClick={confirm.onConfirm}
+            className={`flex-1 rounded-lg border px-4 py-2 text-sm font-semibold transition-colors ${btnColors[confirm.level]}`}>
             Confirm & Execute
           </button>
-          <button
-            onClick={confirm.onCancel}
-            className="rounded-lg border border-[var(--hairline)] px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
+          <button onClick={confirm.onCancel}
+            className="rounded-lg border border-[var(--hairline)] px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
             Cancel
           </button>
         </div>
-
         <p className="mt-3 text-center font-mono text-[0.55rem] text-muted-foreground">
           This action will be logged in the AISS audit trail
         </p>
@@ -137,7 +122,6 @@ function ActionConfirmModal({ confirm }: { confirm: ActionConfirm }) {
   );
 }
 
-// Export for use in other components
 export let showActionConfirm: (opts: Omit<ActionConfirm, "onConfirm" | "onCancel">) => Promise<boolean>;
 
 // ── Route definition ──────────────────────────────────────────────────
@@ -172,15 +156,41 @@ function RootShell({ children }: { children: ReactNode }) {
   );
 }
 
-// ── App with auth + WS + permission popups ────────────────────────────
+// ── CORE AUTH LOGIC ───────────────────────────────────────────────────
+const BASE_URL = (() => {
+  if (typeof window === "undefined") return "http://localhost:8000";
+  return (import.meta.env["VITE_AISS_API_URL"] as string | undefined) ?? "http://localhost:8000";
+})();
+
+/**
+ * Auto-login is REMOVED.
+ * The launcher injects VITE_DISABLE_AUTO_LOGIN=true, and even without
+ * that flag this function no longer exists. Users must log in explicitly
+ * via the /login page or Google OAuth.
+ */
+
+async function validateToken(tok: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${BASE_URL}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${tok}` },
+      signal: AbortSignal.timeout(3000),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+// ── App shell with auth ───────────────────────────────────────────────
 function AppWithWS() {
-  const navigate   = useNavigate();
-  const location   = useLocation();
-  const [showWizard,      setShowWizard]      = useState(false);
-  const [pendingPopup,    setPendingPopup]     = useState<WizardQuestion | null>(null);
-  const [wizardDismissed, setWizardDismissed]  = useState(false);
-  const [actionConfirm,   setActionConfirm]    = useState<ActionConfirm | null>(null);
-  const [authChecked,     setAuthChecked]      = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [showWizard, setShowWizard] = useState(false);
+  const [pendingPopup, setPendingPopup] = useState<WizardQuestion | null>(null);
+  const [wizardDismissed, setWizardDismissed] = useState(false);
+  const [actionConfirm, setActionConfirm] = useState<ActionConfirm | null>(null);
+  const [authed, setAuthed] = useState(false);
+  const authRunning = useRef(false);
 
   const { online } = useBackendStatus();
   const { connected, startMonitoring, answerPopup, dismissPopup } = useWebSocket(
@@ -192,57 +202,113 @@ function AppWithWS() {
     showActionConfirm = (opts) => new Promise<boolean>((resolve) => {
       setActionConfirm({
         ...opts,
-        onConfirm: () => { setActionConfirm(null); resolve(true);  },
-        onCancel:  () => { setActionConfirm(null); resolve(false); },
+        onConfirm: () => { setActionConfirm(null); resolve(true); },
+        onCancel: () => { setActionConfirm(null); resolve(false); },
       });
     });
   }, []);
 
-  // Auth check + auto-login on startup
+  // ── Auth on mount — always ensure a valid token ───────────────────
   useEffect(() => {
-    if (authChecked) return;
-    setAuthChecked(true);
+    const isPublic = location.pathname === "/login"
+      || location.pathname === "/signup"
+      || location.pathname === "/onboarding"
+      || location.pathname === "/oauth-callback";
+    if (isPublic || authRunning.current) return;
+    authRunning.current = true;
 
-    const isLoginPage      = location.pathname === "/login";
-    const isOnboardingPage = location.pathname === "/onboarding";
-    if (isLoginPage || isOnboardingPage) return;
+    const run = async () => {
+      // Version-bump: clear stale tokens from old wrong email
+      const storedVersion = localStorage.getItem("aiss_auth_v");
+      if (storedVersion !== "v3") {
+        setToken(null);
+        localStorage.removeItem("aiss_refresh_token");
+        localStorage.setItem("aiss_auth_v", "v3");
+      }
 
-    // First-time user → show onboarding
-    const onboardingDone = localStorage.getItem("aiss_onboarding_done");
-    if (!onboardingDone) {
-      void navigate({ to: "/onboarding" });
-      return;
-    }
+      // ── 0. SSO handoff — check for ?sso= from the website ────────
+      const ssoResult = await trySSO();
+      if (ssoResult.success) {
+        setAuthed(true);
+        disconnectWS();
+        setTimeout(() => connectWS(), 50);
+        return;
+      }
 
-    const existing = getToken();
-    if (existing) { connectWS(); return; }
+      const existing = getToken();
+      const storedRefresh = localStorage.getItem("aiss_refresh_token");
 
-    // Try silent auto-login
-    const BASE = (import.meta.env.VITE_AISS_API_URL as string | undefined) ?? "http://localhost:8000";
-    const tryLogin = async (email: string, pass: string) => {
-      try {
-        const r = await fetch(`${BASE}/api/auth/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, password: pass }),
-        });
-        if (r.ok) {
-          const d = await r.json() as { access_token: string; refresh_token?: string };
-          localStorage.setItem("aiss_token", d.access_token);
-          if (d.refresh_token) localStorage.setItem("aiss_refresh_token", d.refresh_token);
-          connectWS();
-          return true;
+      // ── If we have stored credentials, wait for backend to be ready
+      // instead of immediately sending user to login page.
+      // This handles the case where backend is still starting up (25-30s).
+      if (existing || storedRefresh) {
+        // Wait up to 60s for backend to come online
+        let backendReady = false;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          try {
+            const r = await fetch(`${BASE_URL}/api/health`, {
+              signal: AbortSignal.timeout(3000),
+            });
+            if (r.ok) { backendReady = true; break; }
+          } catch { /* still starting */ }
+          await new Promise(res => setTimeout(res, 3000));
         }
-      } catch { /* offline */ }
-      return false;
+
+        if (!backendReady) {
+          // Backend never came up — send to login to show error
+          void navigate({ to: "/login" });
+          return;
+        }
+      }
+
+      // 1. Existing access token — validate it
+      if (existing) {
+        const valid = await validateToken(existing);
+        if (valid) {
+          setAuthed(true);
+          disconnectWS();
+          setTimeout(() => connectWS(), 50);
+          await checkOnboardingState();
+          return;
+        }
+        setToken(null);
+      }
+
+      // 2. Silent refresh from stored refresh token (30-day expiry)
+      // This is the key path for "stay logged in" — user logged in once
+      // with Google, refresh token is stored, never asked again for 30 days.
+      const refreshed = await silentRefresh();
+      if (refreshed) {
+        setAuthed(true);
+        disconnectWS();
+        setTimeout(() => connectWS(), 50);
+        await checkOnboardingState();
+        return;
+      }
+
+      // 3. No valid session — send to login page
+      void navigate({ to: "/login" });
     };
 
-    tryLogin("admin@aiss.local", "Admin123!")
-      .then((ok) => { if (!ok) void navigate({ to: "/login" }); })
-      .catch(() => {});
-  }, [authChecked, location.pathname, navigate]);
+    const checkOnboardingState = async () => {
+      const localDone = localStorage.getItem("aiss_onboarding_done");
+      if (localDone) return; // already done locally, skip API call
+      try {
+        const { getOnboardingStatus } = await import("@/lib/api");
+        const ob = await getOnboardingStatus();
+        if (!ob.is_completed) {
+          void navigate({ to: "/onboarding" });
+        } else {
+          localStorage.setItem("aiss_onboarding_done", "1");
+        }
+      } catch { /* backend route may not exist yet */ }
+    };
 
-  // Re-connect WS when backend comes online
+    void run();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Re-connect WS when backend comes back online
   useEffect(() => {
     if (online && getToken()) connectWS();
   }, [online]);
@@ -252,10 +318,11 @@ function AppWithWS() {
     if (connected) setTimeout(() => startMonitoring(), 800);
   }, [connected, startMonitoring]);
 
-  const isLoginPage      = location.pathname === "/login";
-  const isOnboardingPage = location.pathname === "/onboarding";
-
-  if (isLoginPage || isOnboardingPage) return <Outlet />;
+  const isPublicPage = location.pathname === "/login"
+    || location.pathname === "/signup"
+    || location.pathname === "/onboarding"
+    || location.pathname === "/oauth-callback";
+  if (isPublicPage) return <Outlet />;
 
   return (
     <>
@@ -264,7 +331,7 @@ function AppWithWS() {
         wsConnected={connected}
         onOpenWizard={() => setShowWizard(true)}
         onLogout={() => {
-          localStorage.removeItem("aiss_token");
+          setToken(null);
           localStorage.removeItem("aiss_refresh_token");
           void navigate({ to: "/login" });
         }}
@@ -273,7 +340,6 @@ function AppWithWS() {
       </AppShell>
 
       {showWizard && <SetupWizard onClose={() => setShowWizard(false)} />}
-
       {pendingPopup && !showWizard && (
         <PopupQuestion
           question={pendingPopup}
@@ -281,13 +347,11 @@ function AppWithWS() {
           onDismiss={() => { dismissPopup(pendingPopup.id); setPendingPopup(null); setWizardDismissed(true); }}
         />
       )}
-
       {actionConfirm && <ActionConfirmModal confirm={actionConfirm} />}
     </>
   );
 }
 
-// ── Root component ────────────────────────────────────────────────────
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   return (

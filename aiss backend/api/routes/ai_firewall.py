@@ -74,10 +74,9 @@ async def safe_chat(
     engine:  ThreatEngine = Depends(get_engine),
 ):
     """
-    Inspect prompt → if clean, forward to Claude AI.
-    One-shot safe endpoint that combines firewall + AI.
+    Inspect prompt → if clean, forward to AI via OpenRouter.
+    One-shot safe endpoint combining firewall + AI.
     """
-    import os
     ip     = request.client.host if request.client else "unknown"
     result = inspect(req.text, source_ip=ip)
 
@@ -97,29 +96,22 @@ async def safe_chat(
             detail      = f"Blocked by AI Firewall: {result.attack_type} — {result.reason}",
         )
 
-    # Clean — forward to Claude
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise HTTPException(400, "ANTHROPIC_API_KEY not set")
+    # Clean — forward to AI via OpenRouter
+    from modules.llm_router import llm_router
+    if not llm_router.is_available():
+        raise HTTPException(400, "OPENROUTER_API_KEY not set. Add it to .env to enable AI chat.")
 
-    import httpx
-    async with httpx.AsyncClient(timeout=30) as client:
-        res = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key":         api_key,
-                "anthropic-version": "2023-06-01",
-                "Content-Type":      "application/json",
-            },
-            json={
-                "model":    "claude-sonnet-4-20250514",
-                "max_tokens": 500,
-                "messages": [{"role": "user", "content": req.text}],
-            },
+    try:
+        reply = await llm_router.complete(
+            req.text,
+            system="You are a helpful assistant. Answer concisely and accurately.",
+            max_tokens=500,
+            temperature=0.3,
         )
+    except Exception as exc:
+        raise HTTPException(500, f"AI service error: {exc}")
 
-    data = res.json()
     return {
         "firewall": result.to_dict(),
-        "response": data.get("content", [{}])[0].get("text", ""),
+        "response": reply,
     }

@@ -45,7 +45,7 @@ function AIAssistantPage() {
     if (!iocText.trim()) return;
     try {
       const r = await extractIOCs(iocText);
-      setIocResult(r.iocs as Record<string, string[]>);
+      setIocResult(r.iocs as unknown as Record<string, string[]>);
       toast.success("IOCs extracted");
     } catch (e) { toast.error(String(e)); }
   };

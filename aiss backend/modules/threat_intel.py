@@ -143,6 +143,95 @@ async def vt_check_hash(file_hash: str) -> dict:
         return {"source": "virustotal", "available": False, "reason": str(e)}
 
 
+async def vt_check_domain(domain: str) -> dict:
+    """Check a domain reputation via VirusTotal API v3."""
+    if not VT_API_KEY:
+        return {"source": "virustotal", "available": False, "reason": "API key not configured"}
+
+    cache_key = f"vt:domain:{domain}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return cached
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"{VT_BASE_URL}/domains/{domain}",
+                headers={"x-apikey": VT_API_KEY},
+            )
+        if r.status_code == 404:
+            result = {"source": "virustotal", "domain": domain, "found": False}
+        elif r.status_code == 429:
+            logger.warning("VirusTotal rate limit hit")
+            return {"source": "virustotal", "available": False, "reason": "rate_limit"}
+        else:
+            r.raise_for_status()
+            data = r.json().get("data", {}).get("attributes", {})
+            stats = data.get("last_analysis_stats", {})
+            result = {
+                "source":      "virustotal",
+                "domain":      domain,
+                "found":       True,
+                "malicious":   stats.get("malicious", 0),
+                "suspicious":  stats.get("suspicious", 0),
+                "harmless":    stats.get("harmless", 0),
+                "reputation":  data.get("reputation", 0),
+                "categories":  data.get("categories", {}),
+                "registrar":   data.get("registrar", ""),
+                "creation_date": data.get("creation_date"),
+            }
+        _cache_set(cache_key, result)
+        return result
+    except Exception as e:
+        logger.warning(f"VT domain check failed for {domain}: {e}")
+        return {"source": "virustotal", "available": False, "reason": str(e)}
+
+
+async def vt_check_url(url: str) -> dict:
+    """Check a URL reputation via VirusTotal API v3."""
+    if not VT_API_KEY:
+        return {"source": "virustotal", "available": False, "reason": "API key not configured"}
+
+    import base64
+    url_id = base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
+    cache_key = f"vt:url:{url}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return cached
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"{VT_BASE_URL}/urls/{url_id}",
+                headers={"x-apikey": VT_API_KEY},
+            )
+        if r.status_code == 404:
+            result = {"source": "virustotal", "url": url, "found": False}
+        elif r.status_code == 429:
+            logger.warning("VirusTotal rate limit hit")
+            return {"source": "virustotal", "available": False, "reason": "rate_limit"}
+        else:
+            r.raise_for_status()
+            data = r.json().get("data", {}).get("attributes", {})
+            stats = data.get("last_analysis_stats", {})
+            result = {
+                "source":      "virustotal",
+                "url":         url,
+                "found":       True,
+                "malicious":   stats.get("malicious", 0),
+                "suspicious":  stats.get("suspicious", 0),
+                "harmless":    stats.get("harmless", 0),
+                "reputation":  data.get("reputation", 0),
+                "categories":  data.get("categories", {}),
+                "title":       data.get("title", ""),
+            }
+        _cache_set(cache_key, result)
+        return result
+    except Exception as e:
+        logger.warning(f"VT URL check failed for {url}: {e}")
+        return {"source": "virustotal", "available": False, "reason": str(e)}
+
+
 # ── Shodan ────────────────────────────────────────────────────────────
 
 async def shodan_check_ip(ip: str) -> dict:

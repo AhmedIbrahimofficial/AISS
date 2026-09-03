@@ -57,10 +57,11 @@ class LoginRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    access_token:  str
-    refresh_token: str
-    token_type:    str = "bearer"
-    expires_in:    int             # seconds until access token expiry
+    access_token:       str
+    refresh_token:      str
+    token_type:         str = "bearer"
+    expires_in:         int             # seconds until access token expiry
+    must_change_password: bool = False   # true → frontend must redirect to change-pw
 
 
 # ── Refresh ───────────────────────────────────────────────────────────
@@ -98,14 +99,15 @@ class VerifyOtpRequest(BaseModel):
 
 # ── Me ────────────────────────────────────────────────────────────────
 class UserProfile(BaseModel):
-    id:               str
-    username:         str
-    email:            str
-    role:             str
-    is_verified:      bool
-    is_phone_verified: bool
-    created_at:       datetime
-    last_login_at:    Optional[datetime]
+    id:                  str
+    username:            str
+    email:               str
+    role:                str
+    is_verified:         bool
+    is_phone_verified:   bool
+    must_change_password: bool = False
+    created_at:          datetime
+    last_login_at:       Optional[datetime]
 
     class Config:
         from_attributes = True
@@ -123,6 +125,21 @@ class ResetPasswordRequest(BaseModel):
     @field_validator("new_password")
     @classmethod
     def validate_new_password(cls, v: str) -> str:
+        from auth.utils.password import validate_password_strength
+        violations = validate_password_strength(v)
+        if violations:
+            raise ValueError(f"Password must contain: {', '.join(violations)}")
+        return v
+
+
+# ── Change password (forced on first login) ──────────────────────────
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password:     str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_change_password(cls, v: str) -> str:
         from auth.utils.password import validate_password_strength
         violations = validate_password_strength(v)
         if violations:

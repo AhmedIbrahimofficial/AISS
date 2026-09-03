@@ -7,6 +7,7 @@ import { Badge, Bar, DataTable, Metric } from "@/components/soc/ui";
 import { ActionButton } from "@/components/soc/actions";
 import { AttackMap } from "@/components/soc/AttackMap";
 import { PacketVisualizer } from "@/components/soc/PacketVisualizer";
+import { TopologyGraph } from "@/components/soc/TopologyGraph";
 import { useTopologyMap, useAgents, useAgentStats } from "@/hooks/useAISS";
 import { generateAgentToken, addTopologySegment, scanAllNetworks } from "@/lib/api";
 import type { Agent } from "@/lib/api";
@@ -82,6 +83,13 @@ function NetworkPage() {
         <Metric label="Threats (Agents)" value={String(stats.total_threats)} tone={stats.total_threats > 0 ? "critical" : "success"} sub="forwarded" />
         <Metric label="Topology Nodes"   value={String(topology?.node_count ?? 0)} tone="default" sub="discovered" />
       </div>
+
+      {/* Topology graph */}
+      {topology && (topology.nodes.length > 0) ? (
+        <div className="mb-3">
+          <TopologyGraph nodes={topology.nodes} edges={topology.edges} />
+        </div>
+      ) : null}
 
       {/* Attack map + packet viz */}
       <div className="mb-3 grid gap-3 xl:grid-cols-3">

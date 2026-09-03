@@ -29,6 +29,7 @@ except ImportError:
 # ── Import ORM metadata ───────────────────────────────────────────────
 from core.models import Base   # noqa: E402 — must be after path setup
 import auth.models              # noqa: F401 — register auth tables on Base
+import agents.models             # noqa: F401 — register agent tables on Base
 try:
     import modules.network_discovery.models.discovery_models  # noqa: F401
 except Exception:

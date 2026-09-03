@@ -179,10 +179,11 @@ class SecurityConfig:
 
         # ── Warn about missing optional services ──────────────────────
         optional_checks = [
-            ("ANTHROPIC_API_KEY", "AI analysis will use fallback mode (no Claude)"),
-            ("OPENAI_API_KEY",    "AI analysis will use fallback mode (no GPT)"),
-            ("VIRUSTOTAL_API_KEY","VirusTotal threat enrichment disabled"),
-            ("APPRISE_URLS",      "Multi-channel alerts disabled (no APPRISE_URLS)"),
+            ("OPENROUTER_API_KEY", "AI features disabled — add OPENROUTER_API_KEY to .env (https://openrouter.ai/keys)"),
+            ("VIRUSTOTAL_API_KEY",  "VirusTotal threat enrichment disabled"),
+            ("SHODAN_API_KEY",      "Shodan IP enrichment disabled"),
+            ("APPRISE_URLS",        "Multi-channel alerts disabled"),
+            ("GEOIP_DB_PATH",       "GeoIP lookups disabled — download GeoLite2-City.mmdb from MaxMind"),
         ]
         for key, msg in optional_checks:
             if not os.environ.get(key, "").strip():

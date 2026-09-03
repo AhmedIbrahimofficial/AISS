@@ -1,116 +1,114 @@
-import { useCountUp } from "./useCountUp";
+/**
+ * KpiStrip — replaced with a full-width real-time sparkline bar.
+ * NO number boxes. One continuous multi-line chart spanning the full width.
+ * CPU, RAM, active threats, network connections — all live from backend.
+ */
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  Area, AreaChart, CartesianGrid, ComposedChart, Line,
+  ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from "recharts";
+import { Panel } from "./Panel";
 import { C } from "./data";
-import { useThreats, useThreatStats, useSystemHealth } from "@/hooks/useAISS";
+import { useSystemHealth, useThreatStats } from "@/hooks/useAISS";
+import { getLiveNetworkStats } from "@/lib/api";
 
-function Tile({
-  label, value, color, sub, trend, children,
-}: {
-  label: string; value: string; color?: string;
-  sub?: string; trend?: string; children?: React.ReactNode;
-}) {
-  return (
-    <section className="panel flex h-[112px] flex-col justify-between p-3.5">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
-        <p className="label-cap truncate">{label}</p>
-        {trend && <span className="shrink-0 font-mono text-[0.6rem] text-muted-foreground">{trend}</span>}
-      </div>
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
-        <div className="min-w-0">
-          <p className="font-mono text-[1.7rem] leading-none font-bold tabular-nums"
-            style={{ color: color ?? "var(--foreground)" }}>{value}</p>
-          {sub && <p className="mt-1.5 truncate text-[0.65rem] text-muted-foreground">{sub}</p>}
-        </div>
-        {children}
-      </div>
-    </section>
-  );
-}
-
-function Sparkline({ data }: { data: number[] }) {
-  const max = Math.max(...data, 1);
-  const pts = data.map((v, i) => `${(i / (data.length - 1)) * 76},${28 - (v / max) * 24}`).join(" ");
-  return (
-    <svg viewBox="0 0 76 30" className="h-8 w-20 shrink-0">
-      <polyline points={pts} fill="none" stroke={C.teal} strokeWidth="1.6" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function MiniGauge({ value }: { value: number }) {
-  const r = 16;
-  const circ = 2 * Math.PI * r;
-  return (
-    <svg viewBox="0 0 40 40" className="size-10 shrink-0 -rotate-90">
-      <circle cx="20" cy="20" r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="4" />
-      <circle cx="20" cy="20" r={r} fill="none" stroke={C.teal} strokeWidth="4"
-        strokeLinecap="round"
-        strokeDasharray={`${(value / 100) * circ} ${circ}`}
-        style={{ transition: "stroke-dasharray .6s" }} />
-    </svg>
-  );
-}
+type Point = { t: string; cpu: number; ram: number; threats: number; conns: number };
 
 export function KpiStrip() {
-  const { data: stats } = useThreatStats();
   const { data: health } = useSystemHealth();
+  const { data: stats  } = useThreatStats();
+  const { data: net    } = useQuery({ queryKey: ["live-network-stats"], queryFn: getLiveNetworkStats, refetchInterval: 4000 });
 
-  const active   = stats?.active   ?? 0;
-  const critical = stats?.critical ?? 0;
-  const resolved = stats?.resolved ?? 0;
-  const cpu      = health ? Math.round(health.cpu_percent) : 0;
-  const ram      = health ? Math.round(health.ram_percent) : 0;
-  const uptime   = health ? Math.round(health.uptime_secs / 3600) : 0;
+  const [hist, setHist] = useState<Point[]>([]);
 
-  const resolvedC = useCountUp(resolved);
+  useEffect(() => {
+    const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const pt: Point = {
+      t,
+      cpu:     Math.round(health?.cpu_percent ?? 0),
+      ram:     Math.round(health?.ram_percent ?? 0),
+      threats: stats?.active ?? 0,
+      conns:   net?.connections ?? 0,
+    };
+    setHist(prev => {
+      const next = [...prev, pt].slice(-90);
+      if (next.length === 1) {
+        return Array.from({ length: 89 }, (_, i) => ({
+          t: new Date(Date.now() - (89 - i) * 5000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+          cpu: 0, ram: 0, threats: 0, conns: 0,
+        })).concat(next);
+      }
+      return next;
+    });
+  }, [health, stats, net]);
 
-  const spark = [cpu, ram, cpu, ram, cpu, ram, cpu, ram, cpu, ram, cpu, ram];
+  const cpu  = Math.round(health?.cpu_percent ?? 0);
+  const ram  = Math.round(health?.ram_percent ?? 0);
+  const thr  = stats?.active ?? 0;
+  const conn = net?.connections ?? 0;
+
+  const cpuCol  = cpu  > 80 ? C.critical : cpu  > 60 ? C.warning : C.teal;
+  const ramCol  = ram  > 85 ? C.critical : ram  > 70 ? C.warning : "#f59e0b";
+  const thrCol  = thr  > 0  ? C.critical : C.success;
 
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-      <Tile
-        label="Active Threats"
-        value={String(active)}
-        color={active > 0 ? C.critical : C.success}
-        sub="sessions under watch"
-        trend="live"
-      />
-      <Tile
-        label="Resolved Today"
-        value={resolvedC}
-        color={C.cyan}
-        sub="auto-mitigated"
-      />
-      <Tile
-        label="Critical Alerts"
-        value={String(critical)}
-        color={C.critical}
-        sub="P1 queue"
-        trend="SLA 15m"
-      />
-      <Tile
-        label="CPU Usage"
-        value={`${cpu}%`}
-        color={cpu > 80 ? C.critical : cpu > 60 ? C.warning : C.success}
-        sub="this machine"
-        trend="live"
-      />
-      <Tile
-        label="RAM Usage"
-        value={`${ram}%`}
-        color={ram > 85 ? C.critical : ram > 70 ? C.warning : C.teal}
-        sub={health ? `${health.ram_used_mb} / ${health.ram_total_mb} MB` : "loading..."}
-        trend="live"
-      >
-        <Sparkline data={spark} />
-      </Tile>
-      <Tile
-        label="Uptime"
-        value={`${uptime}h`}
-        color={C.teal}
-        sub="backend running"
-      >
-        <MiniGauge value={Math.min(100, uptime)} />
-      </Tile>
+    <div className="rounded-lg border border-[var(--hairline)] bg-[rgba(255,255,255,0.015)] overflow-hidden">
+      {/* Live legend strip */}
+      <div className="flex items-center gap-6 border-b border-[var(--hairline)] px-4 py-2">
+        <span className="font-mono text-[0.65rem]" style={{ color: cpuCol }}>
+          ⬛ CPU <strong>{cpu}%</strong>
+        </span>
+        <span className="font-mono text-[0.65rem]" style={{ color: ramCol }}>
+          ⬛ RAM <strong>{ram}%</strong>{health ? ` · ${(health.ram_used_mb / 1024).toFixed(1)} GB` : ""}
+        </span>
+        <span className="font-mono text-[0.65rem]" style={{ color: thrCol }}>
+          ⬛ Threats <strong>{thr}</strong>{stats ? ` · ${stats.critical} critical` : ""}
+        </span>
+        <span className="font-mono text-[0.65rem]" style={{ color: C.cyan }}>
+          ⬛ Connections <strong>{conn}</strong>{net ? ` · ${net.recv_mb_s.toFixed(1)} MB/s` : ""}
+        </span>
+        <span className="ml-auto flex items-center gap-1.5 font-mono text-[0.6rem] text-muted-foreground">
+          <span className="dot-pulse size-1.5 rounded-full bg-[var(--success)]" /> LIVE
+        </span>
+      </div>
+
+      {/* The chart — full width, no padding */}
+      <ResponsiveContainer width="100%" height={120}>
+        <ComposedChart data={hist} margin={{ top: 8, right: 0, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id="gKpiCpu" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C.teal} stopOpacity={0.3} />
+              <stop offset="100%" stopColor={C.teal} stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="gKpiRam" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.22} />
+              <stop offset="100%" stopColor="#f59e0b" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid stroke="rgba(255,255,255,0.04)" vertical={false} />
+          <XAxis dataKey="t" tick={{ fill: C.muted, fontSize: 8, fontFamily: "monospace" }}
+            axisLine={false} tickLine={false} interval={17} />
+          <YAxis yAxisId="pct" domain={[0, 100]}
+            tick={{ fill: C.muted, fontSize: 8 }} axisLine={false} tickLine={false}
+            tickFormatter={v => `${v}%`} width={30} />
+          <YAxis yAxisId="conn" orientation="right" domain={[0, "auto"]}
+            tick={{ fill: C.muted, fontSize: 8 }} axisLine={false} tickLine={false} width={28} />
+          <Tooltip
+            contentStyle={{ background: "#0a1310", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, fontSize: 10, fontFamily: "monospace" }}
+            labelStyle={{ color: C.muted }}
+          />
+          <Area yAxisId="pct" type="monotone" dataKey="cpu" name="CPU %"
+            stroke={C.teal} fill="url(#gKpiCpu)" strokeWidth={1.8} dot={false} isAnimationActive={false} />
+          <Area yAxisId="pct" type="monotone" dataKey="ram" name="RAM %"
+            stroke="#f59e0b" fill="url(#gKpiRam)" strokeWidth={1.4} dot={false} isAnimationActive={false} />
+          <Line yAxisId="pct" type="stepAfter" dataKey="threats" name="Threats"
+            stroke={C.critical} strokeWidth={2} dot={false} isAnimationActive={false} strokeDasharray="3 2" />
+          <Line yAxisId="conn" type="monotone" dataKey="conns" name="Connections"
+            stroke={C.cyan} strokeWidth={1.2} dot={false} isAnimationActive={false} opacity={0.6} />
+        </ComposedChart>
+      </ResponsiveContainer>
     </div>
   );
 }

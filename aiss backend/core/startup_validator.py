@@ -91,27 +91,49 @@ async def run_startup_checks() -> StartupReport:
     except Exception as e:
         report.add("License", "WARN", f"License check failed: {e}")
 
-    # ── 3. Database connectivity ──────────────────────────────────────
-    try:
-        from core.database import engine
-        from sqlalchemy import text
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        report.add("Database", "PASS", f"Connected: {_mask_url(os.environ.get('DATABASE_URL',''))}")
-    except Exception as e:
-        level = "FAIL" if is_prod else "WARN"
-        report.add("Database", level, f"Connection failed: {e}")
+    # ── 3-4. Run DB + Redis checks concurrently (slow I/O) ──────────────
+    async def _check_db():
+        try:
+            from core.database import engine
+            from sqlalchemy import text
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            return ("Database", "PASS", f"Connected: {_mask_url(os.environ.get('DATABASE_URL',''))}")
+        except Exception as e:
+            level = "FAIL" if is_prod else "WARN"
+            return ("Database", level, f"Connection failed: {e}")
 
-    # ── 4. Redis connectivity ─────────────────────────────────────────
-    try:
-        import redis.asyncio as aioredis
-        url    = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
-        client = aioredis.from_url(url, socket_connect_timeout=3, socket_timeout=3)
-        await asyncio.wait_for(client.ping(), timeout=3)
-        await client.aclose()
-        report.add("Redis", "PASS", f"Connected: {_mask_url(url)}")
-    except Exception as e:
-        report.add("Redis", "WARN", f"Redis unavailable (Celery tasks disabled): {e}")
+    async def _check_redis():
+        try:
+            import redis.asyncio as aioredis
+            url    = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
+            client = aioredis.from_url(url, socket_connect_timeout=2, socket_timeout=2)
+            await asyncio.wait_for(client.ping(), timeout=2)
+            await client.aclose()
+            return ("Redis", "PASS", f"Connected: {_mask_url(url)}")
+        except Exception as e:
+            return ("Redis", "WARN", f"Redis unavailable (using asyncio task runner instead): {e}")
+
+    async def _check_bom():
+        bom_files = []
+        for py_file in Path(".").rglob("*.py"):
+            parts = py_file.parts
+            if any(skip in parts for skip in (".venv", "venv", "node_modules", "build", "dist", "__pycache__")):
+                continue
+            try:
+                raw = py_file.read_bytes()[:3]
+                if raw.startswith(b"\xef\xbb\xbf"):
+                    bom_files.append(str(py_file))
+            except Exception:
+                pass
+        if bom_files:
+            return ("SourceBOM", "FAIL" if is_prod else "WARN",
+                       f"BOM character found in {len(bom_files)} file(s): {', '.join(bom_files[:5])}")
+        return ("SourceBOM", "PASS", "No BOM characters in source files")
+
+    db_res, redis_res, bom_res = await asyncio.gather(_check_db(), _check_redis(), _check_bom())
+    report.add(*db_res)
+    report.add(*redis_res)
 
     # ── 5. Required directories ───────────────────────────────────────
     required_dirs = ["logs", "logs/evidence", "data", "rules", "static"]
@@ -157,19 +179,25 @@ async def run_startup_checks() -> StartupReport:
         report.add("EvidenceKey", "WARN",
                    "EVIDENCE_ENCRYPTION_KEY not set — auto-generated (not persistent)")
 
-    # ── 9. At least one LLM provider ─────────────────────────────────
+    # ── 9. LLM provider — OpenRouter is primary ──────────────────────
     llm_keys = [
-        os.environ.get("ANTHROPIC_API_KEY", ""),
+        os.environ.get("OPENROUTER_API_KEY", ""),   # PRIMARY — required
+        os.environ.get("ANTHROPIC_API_KEY", ""),    # legacy fallback
         os.environ.get("OPENAI_API_KEY", ""),
         os.environ.get("GROQ_API_KEY", ""),
         os.environ.get("GOOGLE_API_KEY", ""),
         os.environ.get("LLAMA_MODEL_PATH", ""),
     ]
-    if any(k.strip() for k in llm_keys):
-        report.add("LLMProvider", "PASS", "At least one LLM provider configured")
+    if os.environ.get("OPENROUTER_API_KEY", "").strip():
+        report.add("LLMProvider", "PASS", "OpenRouter API key configured — all AI features active")
+    elif any(k.strip() for k in llm_keys[1:]):
+        report.add("LLMProvider", "WARN",
+                   "No OPENROUTER_API_KEY — legacy provider detected but AI agent will not work. "
+                   "Add OPENROUTER_API_KEY to .env: https://openrouter.ai/keys")
     else:
         report.add("LLMProvider", "WARN",
-                   "No LLM provider keys set — AI analysis will use fallback responses")
+                   "No LLM keys set — AI features disabled. "
+                   "Add OPENROUTER_API_KEY to .env: https://openrouter.ai/keys")
 
     # ── 10. SECRET_KEY security ───────────────────────────────────────
     sk = os.environ.get("SECRET_KEY", "")
@@ -180,6 +208,9 @@ async def run_startup_checks() -> StartupReport:
         report.add("SecretKey", level, f"Secret key too short ({len(sk)} chars, need ≥64)")
     else:
         report.add("SecretKey", "WARN", "SECRET_KEY not set — auto-generated")
+
+    # ── 11. Source file encoding (BOM prevention) — result from parallel check ──
+    report.add(*bom_res)
 
     # ── Print and check for fatal failures ───────────────────────────
     report.print_summary()

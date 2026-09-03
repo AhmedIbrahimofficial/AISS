@@ -21,6 +21,7 @@ import collections
 import hashlib
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -360,8 +361,8 @@ async def _scan_services(engine) -> None:
     global _service_baseline
 
     try:
-        import subprocess
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["sc", "query", "type=", "all", "state=", "all"],
             capture_output=True, text=True, timeout=10
         )
@@ -400,8 +401,8 @@ async def _scan_scheduled_tasks(engine) -> None:
     global _task_baseline
 
     try:
-        import subprocess
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["schtasks", "/query", "/fo", "CSV", "/nh"],
             capture_output=True, text=True, timeout=15
         )
@@ -448,7 +449,6 @@ async def _scan_registry(engine) -> None:
     """Monitor Windows registry run keys for new persistence entries."""
     if not IS_WINDOWS:
         return
-    import subprocess
 
     run_keys = [
         r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
@@ -457,7 +457,8 @@ async def _scan_registry(engine) -> None:
     ]
     for key in run_keys:
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 ["reg", "query", key],
                 capture_output=True, text=True, timeout=5
             )

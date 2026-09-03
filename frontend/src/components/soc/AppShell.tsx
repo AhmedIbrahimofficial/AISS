@@ -1,52 +1,44 @@
-import { Link } from "@tanstack/react-router";
+﻿import { Link } from "@tanstack/react-router";
 import {
   LayoutDashboard, ShieldAlert, Siren, Server, Network, BarChart3,
-  FileCheck2, Users, Settings, Shield, Search, Bell, Activity,
-  Radar, Radio, Globe2, Laptop, Fingerprint, Flame, ShieldCheck,
-  Database, ScrollText, Bug, FlaskConical, ScanLine, Crosshair,
-  Cloud, History, Microscope, Workflow, Bot, Cpu, KeyRound,
-  BadgeCheck, Target,
+  Users, Settings, Shield, Search, Bell, Activity,
+  Radar, Radio, Globe2, Bug, ScanLine,
+  History, Workflow, Bot, Target, PlayCircle, MessageSquare,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
 export const NAV = [
-  { to: "/",                    label: "Dashboard",            icon: LayoutDashboard, group: "Monitor" },
-  { to: "/threat-center",       label: "Threat Center",        icon: Radar,           group: "Monitor" },
-  { to: "/threats",             label: "Detections",           icon: ShieldAlert,     group: "Monitor" },
+  // Monitor
+  { to: "/ai-console",          label: "AI Console",           icon: MessageSquare,   group: "Monitor" },
+  { to: "/",                    label: "Security Overview",    icon: LayoutDashboard, group: "Monitor" },
+  { to: "/threats",             label: "Threat Detection",     icon: ShieldAlert,     group: "Monitor" },
+  { to: "/incidents",           label: "Incidents",            icon: Siren,           group: "Monitor" },
   { to: "/live-monitoring",     label: "Live Monitoring",      icon: Radio,           group: "Monitor" },
-  { to: "/threat-intelligence", label: "Threat Intelligence",  icon: Globe2,          group: "Monitor" },
-  { to: "/network-monitor",     label: "Network Monitor",      icon: Network,         group: "Infrastructure" },
-  { to: "/network",             label: "Remote Agents & Topology", icon: Radio,       group: "Infrastructure" },
-  { to: "/assets",              label: "Assets",               icon: Server,          group: "Infrastructure" },
-  { to: "/endpoints",           label: "Endpoints",            icon: Laptop,          group: "Infrastructure" },
-  { to: "/firewall",            label: "Firewall",             icon: Flame,           group: "Infrastructure" },
-  { to: "/ids-ips",             label: "IDS / IPS",            icon: ShieldCheck,     group: "Infrastructure" },
-  { to: "/cloud-security",      label: "Cloud Security",       icon: Cloud,           group: "Infrastructure" },
-  { to: "/siem",                label: "SIEM",                 icon: Database,        group: "Analytics" },
-  { to: "/logs",                label: "Log Explorer",         icon: ScrollText,      group: "Analytics" },
-  { to: "/mitre/t1566.001",     label: "MITRE ATT&CK",        icon: Target,          group: "Analytics" },
-  { to: "/vulnerability-scanner", label: "Vulnerability Scanner", icon: ScanLine,    group: "Analytics" },
-  { to: "/attack-surface",      label: "Attack Surface",       icon: Crosshair,       group: "Analytics" },
-  { to: "/reports",             label: "Reports",              icon: BarChart3,       group: "Analytics" },
-  { to: "/incident-response",   label: "Incident Response",    icon: Siren,           group: "Response" },
-  { to: "/incidents",           label: "Cases",                icon: FileCheck2,      group: "Response" },
-  { to: "/malware-analysis",    label: "Malware Analysis",     icon: Bug,             group: "Response" },
-  { to: "/sandbox",             label: "Sandbox",              icon: FlaskConical,    group: "Response" },
-  { to: "/forensics",           label: "Forensics",            icon: Microscope,      group: "Response" },
-  { to: "/playbooks",           label: "Playbooks",            icon: Workflow,        group: "Response" },
-  { to: "/automation",          label: "Automation",           icon: Cpu,             group: "Response" },
-  { to: "/ai-assistant",        label: "AI Assistant",         icon: Bot,             group: "Response" },
-  { to: "/users",               label: "Users & Access",       icon: Users,           group: "Governance" },
-  { to: "/identity-protection", label: "Identity Protection",  icon: Fingerprint,     group: "Governance" },
-  { to: "/compliance",          label: "Compliance",           icon: FileCheck2,      group: "Governance" },
-  { to: "/audit-logs",          label: "Audit Logs",           icon: History,         group: "Governance" },
-  { to: "/api-management",      label: "API Management",       icon: KeyRound,        group: "Governance" },
-  { to: "/license",             label: "License",              icon: BadgeCheck,      group: "Governance" },
-  { to: "/system-health",       label: "System Health",        icon: Activity,        group: "Governance" },
-  { to: "/settings",            label: "Settings",             icon: Settings,        group: "Governance" },
+  // Network Security
+  { to: "/network-monitor",     label: "Network Monitor",      icon: Network,         group: "Network Security" },
+  { to: "/network",             label: "Network Discovery",    icon: Radar,           group: "Network Security" },
+  { to: "/security-gateway",    label: "Security Gateway",     icon: Shield,          group: "Network Security" },
+  // Threat Intelligence
+  { to: "/threat-intelligence", label: "IOC & Intel Feeds",    icon: Globe2,          group: "Intelligence" },
+  { to: "/malware-analysis",    label: "File / Malware Analysis", icon: Bug,          group: "Intelligence" },
+  // MITRE ATT&CK is rendered as a plain <a> tag in nav (dynamic route)
+  // Vulnerability & Assets
+  { to: "/vulnerability-scanner", label: "Vulnerability Scanner", icon: ScanLine,    group: "Vulnerability" },
+  { to: "/assets",              label: "Assets",               icon: Server,          group: "Vulnerability" },
+  // AI & Automation
+  { to: "/agent",               label: "AI Security Agent",    icon: Bot,             group: "AI & Automation" },
+  { to: "/playbooks",           label: "Playbooks",            icon: Workflow,        group: "AI & Automation" },
+  { to: "/jobs",                label: "Scan Jobs",            icon: PlayCircle,      group: "AI & Automation" },
+  // Reports & Audit
+  { to: "/reports",             label: "Reports",              icon: BarChart3,       group: "Reporting" },
+  { to: "/audit-logs",          label: "Audit Logs",           icon: History,         group: "Reporting" },
+  // Settings
+  { to: "/system-health",       label: "System Health",        icon: Activity,        group: "Settings" },
+  { to: "/users",               label: "Users & Access",       icon: Users,           group: "Settings" },
+  { to: "/settings",            label: "Settings",             icon: Settings,        group: "Settings" },
 ] as const;
 
-const GROUPS = ["Monitor", "Infrastructure", "Analytics", "Response", "Governance"] as const;
+const GROUPS = ["Monitor", "Network Security", "Intelligence", "Vulnerability", "AI & Automation", "Reporting", "Settings"] as const;
 
 function Clock() {
   const [now, setNow] = useState<Date | null>(null);
@@ -82,7 +74,7 @@ export function AppShell({
     const poll = async () => {
       try {
         const r = await fetch(
-          ((import.meta.env.VITE_AISS_API_URL as string | undefined) ?? "http://localhost:8000") + "/api/system/health",
+          ((import.meta.env["VITE_AISS_API_URL"] as string | undefined) ?? "http://localhost:8000") + "/api/system/health",
           { headers: { Authorization: `Bearer ${localStorage.getItem("aiss_token") ?? ""}` } }
         );
         if (r.ok) {
@@ -127,6 +119,15 @@ export function AppShell({
                     <span className="truncate">{item.label}</span>
                   </Link>
                 ))}
+                {g === "Intelligence" && (
+                  <a
+                    href="/mitre/t1566.001"
+                    className="flex items-center gap-2.5 rounded-md border border-transparent px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-white/4 hover:text-foreground"
+                  >
+                    <Target className="size-4 shrink-0" />
+                    <span className="truncate">MITRE ATT&amp;CK</span>
+                  </a>
+                )}
               </div>
             </div>
           ))}
@@ -135,7 +136,7 @@ export function AppShell({
           <div className="grid grid-cols-2 gap-2">
             <div className="rounded-md border border-[var(--hairline)] bg-white/3 px-2 py-1.5">
               <p className="label-cap text-[0.5rem]">Processes</p>
-              <p className="font-mono text-sm">{sensorCount ?? "—"}</p>
+              <p className="font-mono text-sm">{sensorCount ?? "â€”"}</p>
             </div>
             <div className="rounded-md border border-[var(--hairline)] bg-white/3 px-2 py-1.5">
               <p className="label-cap text-[0.5rem]">Backend</p>
@@ -153,7 +154,7 @@ export function AppShell({
           {onOpenWizard && (
             <button type="button" onClick={onOpenWizard}
               className="w-full rounded-md border border-[var(--hairline)] bg-white/3 px-2 py-1.5 text-left font-mono text-[0.58rem] text-muted-foreground tracking-[0.08em] uppercase transition-colors hover:border-primary/40 hover:text-primary">
-              ⚙ Configure AISS
+              âš™ Configure AISS
             </button>
           )}
           {!backendOnline && (
@@ -167,7 +168,7 @@ export function AppShell({
           {onLogout && (
             <button type="button" onClick={onLogout}
               className="w-full rounded-md border border-[var(--hairline)] bg-white/3 px-2 py-1.5 text-left font-mono text-[0.58rem] text-muted-foreground tracking-[0.08em] uppercase transition-colors hover:border-[var(--critical)]/40 hover:text-[var(--critical)]">
-              ⏻ Logout
+              â» Logout
             </button>
           )}
         </div>
@@ -183,8 +184,8 @@ export function AppShell({
             </div>
             <label className="ml-2 hidden min-w-0 flex-1 items-center gap-2 rounded-md border border-[var(--hairline)] bg-white/3 px-3 py-1.5 xl:flex">
               <Search className="size-3.5 shrink-0 text-muted-foreground" />
-              <input placeholder="Search assets, IPs, incidents…" className="w-full min-w-0 bg-transparent text-xs outline-none placeholder:text-muted-foreground" />
-              <kbd className="shrink-0 rounded border border-[var(--hairline)] px-1 font-mono text-[0.55rem] text-muted-foreground">⌘K</kbd>
+              <input placeholder="Search assets, IPs, incidentsâ€¦" className="w-full min-w-0 bg-transparent text-xs outline-none placeholder:text-muted-foreground" />
+              <kbd className="shrink-0 rounded border border-[var(--hairline)] px-1 font-mono text-[0.55rem] text-muted-foreground">âŒ˜K</kbd>
             </label>
           </div>
           <div className="flex items-center gap-3">
@@ -210,12 +211,16 @@ export function AppShell({
               {item.label}
             </Link>
           ))}
+          <a href="/mitre/t1566.001"
+            className="shrink-0 rounded-md border border-transparent px-3 py-1.5 text-xs whitespace-nowrap text-muted-foreground">
+            MITRE ATT&amp;CK
+          </a>
         </nav>
 
         <main className="min-w-0 flex-1 p-3 md:p-4">{children}</main>
 
         <footer className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-t border-[var(--hairline)] bg-[var(--surface)] px-4 py-2.5 md:px-6">
-          <p className="truncate font-mono text-[0.62rem] text-muted-foreground">AISS v2.0.0 · AI Security Platform · {backendOnline ? "backend connected" : "backend offline"}</p>
+          <p className="truncate font-mono text-[0.62rem] text-muted-foreground">AISS v2.0.0 Â· AI Security Platform Â· {backendOnline ? "backend connected" : "backend offline"}</p>
           <p className="shrink-0 font-mono text-[0.62rem]" style={{ color: statusColor }}>{statusText}</p>
         </footer>
       </div>

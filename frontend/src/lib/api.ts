@@ -7,7 +7,7 @@
  * WS:       WebSocket for real-time threat feed + wizard popups
  */
 
-const BASE = (import.meta.env.VITE_AISS_API_URL as string | undefined) ?? "http://localhost:8000";
+const BASE = (import.meta.env["VITE_AISS_API_URL"] as string | undefined) ?? "http://localhost:8000";
 const WS_BASE = BASE.replace(/^http/, "ws");
 
 // ── Token management ──────────────────────────────────────────────────
@@ -24,49 +24,246 @@ export function getToken(): string | null {
   return _token;
 }
 
-// ── Core fetch helper ─────────────────────────────────────────────────
+// ── Core fetch helper — auto-refreshes expired tokens silently ──────
 async function apiFetch<T>(
   path: string,
   opts: RequestInit = {},
   skipAuth = false,
 ): Promise<T> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(opts.headers as Record<string, string> | undefined),
+  const makeHeaders = (): Record<string, string> => {
+    const h: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...(opts.headers as Record<string, string> | undefined),
+    };
+    const tok = getToken();
+    if (tok && !skipAuth) h["Authorization"] = `Bearer ${tok}`;
+    return h;
   };
-  const tok = getToken();
-  if (tok && !skipAuth) headers["Authorization"] = `Bearer ${tok}`;
 
-  const res = await fetch(`${BASE}${path}`, { ...opts, headers });
+  let res = await fetch(`${BASE}${path}`, { ...opts, headers: makeHeaders() });
+
+  // Silent refresh on 401 — keeps the user logged in transparently
+  if (res.status === 401 && !skipAuth) {
+    const refreshed = await silentRefresh();
+    if (refreshed) {
+      // Retry with new token
+      res = await fetch(`${BASE}${path}`, { ...opts, headers: makeHeaders() });
+    }
+  }
+
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`);
+    throw new Error(formatApiError(err) || `HTTP ${res.status}`);
   }
   return res.json() as Promise<T>;
 }
 
+// Format FastAPI / backend error payloads into a readable string.
+function formatApiError(payload: unknown): string {
+  if (!payload || typeof payload !== "object") return "Request failed";
+  const p = payload as Record<string, unknown>;
+
+  if (typeof p["detail"] === "string") return p["detail"];
+
+  if (Array.isArray(p["detail"])) {
+    return p["detail"]
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          const err = item as Record<string, unknown>;
+          const loc = Array.isArray(err["loc"]) ? err["loc"].join(".") : err["loc"];
+          const msg = typeof err["msg"] === "string" ? err["msg"] : undefined;
+          if (loc && msg) return `${loc}: ${msg}`;
+          return msg ?? JSON.stringify(item);
+        }
+        return String(item);
+      })
+      .join("; ");
+  }
+
+  if (typeof p["error"] === "string") return p["error"];
+  if (typeof p["message"] === "string") return p["message"];
+
+  return JSON.stringify(payload);
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────
-export async function login(username: string, password: string) {
-  const form = new URLSearchParams({ username, password });
+export async function register(username: string, email: string, password: string, phone_number?: string) {
+  const res = await fetch(`${BASE}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, email, password, phone_number }),
+  });
+  const data = (await res.json()) as {
+    user_id?: string; username?: string; email?: string; message?: string;
+  };
+  if (!res.ok || !data.user_id) {
+    throw new Error(formatApiError(data) || "Registration failed");
+  }
+  return data as { user_id: string; username: string; email: string; message: string };
+}
+
+export async function login(email: string, password: string) {
   const data = await fetch(`${BASE}/api/auth/login`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: form,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
   }).then((r) => r.json()) as {
     access_token: string; refresh_token: string;
-    token_type: string; username: string; role: string;
+    token_type: string; expires_in: number;
+    must_change_password?: boolean;
   };
+  if (!data.access_token) throw new Error((data as unknown as { detail?: string }).detail ?? "Login failed");
   setToken(data.access_token);
   localStorage.setItem("aiss_refresh_token", data.refresh_token ?? "");
+  localStorage.setItem("aiss_onboarding_done", "1");
+  startBackgroundRefresh();
   return data;
 }
 
 export function logout() {
+  // Stop background refresh first
+  stopBackgroundRefresh();
+  // Revoke refresh token on backend
+  const rt = localStorage.getItem("aiss_refresh_token");
+  if (rt) {
+    fetch(`${BASE}/api/auth/logout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: rt }),
+    }).catch(() => {});
+  }
   setToken(null);
   localStorage.removeItem("aiss_refresh_token");
 }
 
-export const getMe = () => apiFetch<{ username: string; role: string; email: string }>("/api/auth/me");
+// Silently refresh the access token using the stored refresh token.
+// Called automatically before each API request if the token is expiring.
+let _refreshPromise: Promise<boolean> | null = null;
+export async function silentRefresh(): Promise<boolean> {
+  if (_refreshPromise) return _refreshPromise;
+  const rt = localStorage.getItem("aiss_refresh_token");
+  if (!rt) return false;
+  _refreshPromise = fetch(`${BASE}/api/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: rt }),
+  }).then(async (r) => {
+    if (!r.ok) {
+      // Only clear tokens on explicit auth failure (401/403), not network errors
+      if (r.status === 401 || r.status === 403) {
+        setToken(null); localStorage.removeItem("aiss_refresh_token");
+      }
+      return false;
+    }
+    const d = await r.json() as { access_token: string; refresh_token: string };
+    setToken(d.access_token);
+    localStorage.setItem("aiss_refresh_token", d.refresh_token);
+    startBackgroundRefresh();
+    return true;
+  }).catch(() => false).finally(() => { _refreshPromise = null; });
+  return _refreshPromise;
+}
+
+// ── Periodic background refresh (every 10 minutes) ──────────────────────
+// Keeps the session alive even while the user is idle.
+// This implements the "login once" behavior — session extends with each refresh.
+let _bgRefreshInterval: ReturnType<typeof setInterval> | null = null;
+export function startBackgroundRefresh() {
+  if (_bgRefreshInterval) return;
+  _bgRefreshInterval = setInterval(() => {
+    if (localStorage.getItem("aiss_refresh_token")) {
+      void silentRefresh();
+    }
+  }, 10 * 60 * 1000); // every 10 minutes
+}
+export function stopBackgroundRefresh() {
+  if (_bgRefreshInterval) {
+    clearInterval(_bgRefreshInterval);
+    _bgRefreshInterval = null;
+  }
+}
+
+// ── Onboarding ────────────────────────────────────────────────────────
+export const getOnboardingStatus = () =>
+  apiFetch<{ is_completed: boolean; completed_steps: string[]; completed_at: string | null }>("/api/auth/onboarding");
+
+export const completeOnboarding = (completed_steps: string[] = []) =>
+  apiFetch<{ status: string; completed_at: string }>("/api/auth/onboarding/complete", {
+    method: "POST",
+    body: JSON.stringify({ completed_steps }),
+  });
+
+// ── Device Pairing ────────────────────────────────────────────────────
+export const generatePairingToken = (device_name: string, device_type = "desktop") =>
+  apiFetch<{ device_id: string; pairing_token: string; expires_at: string; expires_in_seconds: number; instructions: string }>(
+    "/api/auth/devices/pairing-token",
+    { method: "POST", body: JSON.stringify({ device_name, device_type }) }
+  );
+
+export const listDevices = () =>
+  apiFetch<{ devices: DeviceInfo[] }>("/api/auth/devices");
+
+export const revokeDevice = (device_id: string, reason = "Revoked by user") =>
+  apiFetch<{ status: string }>(`/api/auth/devices/${device_id}/revoke`, {
+    method: "POST", body: JSON.stringify({ reason }),
+  });
+
+export interface DeviceInfo {
+  id: string;
+  device_name: string;
+  device_type: string;
+  platform: string | null;
+  hostname: string | null;
+  os_info: string | null;
+  status: "pending" | "paired" | "connected" | "disconnected" | "revoked";
+  is_paired: boolean;
+  is_revoked: boolean;
+  paired_at: string | null;
+  last_seen_at: string | null;
+  last_seen_ip: string | null;
+  connection_count: number;
+  created_at: string;
+}
+
+export const getMe = () => apiFetch<{ username: string; role: string; email: string; id: string; must_change_password?: boolean }>("/api/auth/me");
+
+export const changePassword = (current_password: string, new_password: string) =>
+  apiFetch<{ message: string }>("/api/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({ current_password, new_password }),
+  });
+
+export interface UserInfo {
+  id: string;
+  username: string;
+  email: string;
+  role: string;
+  is_active: boolean;
+  is_verified: boolean;
+  created_at: string | null;
+  last_login_at: string | null;
+  last_login_ip: string | null;
+  active_sessions: number;
+}
+
+export interface UsersResponse {
+  users: UserInfo[];
+  total: number;
+  admin_count: number;
+  active_count: number;
+}
+
+export const getUsers = () => apiFetch<UsersResponse>("/api/auth/users");
+
+// ── System Config (API keys, settings) ─────────────────────────────────
+export const getSystemConfig = () =>
+  apiFetch<{ config: Record<string, { value: string; masked: boolean }>; sensitive_keys: string[] }>("/api/system/config");
+export const updateSystemConfig = (updates: Record<string, string>) =>
+  apiFetch<{ applied: number; message: string }>("/api/system/config", {
+    method: "POST",
+    body: JSON.stringify(updates),
+  });
 
 // ── Health ────────────────────────────────────────────────────────────
 export const getHealth    = () => apiFetch<SystemHealth>("/api/health", {}, true);
@@ -96,9 +293,16 @@ export const exportThreatsDashboard = () => fetch(`${BASE}/api/threats/export/da
 // ── Scanner ───────────────────────────────────────────────────────────
 export const triggerScan = () => apiFetch<{ status: string }>("/api/scanner/scan", { method: "POST" });
 
+// ── Live System (real PC data) ────────────────────────────────────────
+export const getLiveProcesses    = () => apiFetch<LiveProcessData>("/api/live/processes");
+export const getLiveFiles        = () => apiFetch<LiveFileData>("/api/live/files");
+export const getLiveNetworkStats = () => apiFetch<LiveNetworkStats>("/api/live/network-stats");
+export const getLiveDisk         = () => apiFetch<{ partitions: DiskPartition[] }>("/api/live/disk");
+
+export const getNetworkStats     = () => getLiveNetworkStats(); // alias used by PacketVisualizer
+
 // ── Network ───────────────────────────────────────────────────────────
 export const getNetworkConnections = () => apiFetch<{ connections: NetworkConnection[] }>("/api/network/connections");
-export const getNetworkStats       = () => apiFetch<NetworkStats>("/api/network/stats");
 
 // ── Network Topology ──────────────────────────────────────────────────
 export const getTopologyMap = () => apiFetch<TopologyMap>("/api/topology/map");
@@ -152,16 +356,45 @@ export const aiAnalyzeThreat = (threatId: string) =>
 
 // ── SOC Chat ──────────────────────────────────────────────────────────
 export const socChat = (message: string) =>
-  apiFetch<{ response: string }>("/api/soc-chat", { method: "POST", body: JSON.stringify({ message }) });
+  apiFetch<{ response: string; provider: string; tool_calls: Array<{ tool: string; args: Record<string, unknown>; result: Record<string, unknown> }> }>("/api/soc-chat", { method: "POST", body: JSON.stringify({ message }) });
+
+export const socChatV2 = (message: string, history: Array<{ role: string; text: string }> = []) =>
+  apiFetch<{
+    response: string;
+    provider: string;
+    tool_calls: Array<{ tool: string; args: Record<string, unknown>; result: Record<string, unknown> }>;
+  }>("/api/soc-chat", { method: "POST", body: JSON.stringify({ message, history }) });
 
 // ── Kill Chain ────────────────────────────────────────────────────────
-export const getKillChain = () => apiFetch<KillChainStatus>("/api/kill-chain/status");
+export const getKillChain = () => apiFetch<KillChainStatus>("/api/kill-chain");
 
 // ── Dataset ───────────────────────────────────────────────────────────
 export const getDatasetStatus = () => apiFetch<DatasetStatus>("/api/dataset/status");
 
 // ── License ───────────────────────────────────────────────────────────
 export const getLicenseInfo = () => apiFetch<LicenseInfo>("/api/agents/setup/questions");
+
+// ── Security Orchestrator (Autonomous Scans) ────────────────────────
+export const getSecurityTasks = (limit = 50) =>
+  apiFetch<{ status: string; data: SecurityTaskSummary[] }>(`/api/security/tasks?limit=${limit}`);
+
+export const getSecurityTask = (taskId: string) =>
+  apiFetch<{ status: string; data: SecurityTaskDetail }>(`/api/security/tasks/${taskId}`);
+
+export const cancelSecurityTask = (taskId: string) =>
+  apiFetch<{ status: string; message: string }>(`/api/security/tasks/${taskId}/cancel`, { method: "POST" });
+
+export const startSecurityScan = (opts: { description?: string; target_dirs?: string[]; eicar_test?: boolean } = {}) =>
+  apiFetch<{ task_id: string; status: string; message: string }>("/api/security/full-scan", {
+    method: "POST",
+    body: JSON.stringify(opts),
+  });
+
+export const startEicarTest = () =>
+  apiFetch<{ task_id: string; status: string; message: string }>("/api/security/eicar-test", { method: "POST" });
+
+export const verifyPipeline = () =>
+  apiFetch<{ status: string; data: PipelineVerificationResult }>("/api/security/verify-pipeline", { method: "POST" });
 
 // ═════════════════════════════════════════════════════════════════════
 // WebSocket client
@@ -186,23 +419,33 @@ export function connectWS(): WebSocket | null {
   const tok = getToken();
   if (!tok) return null;
   if (_ws && _ws.readyState === WebSocket.OPEN) return _ws;
+  if (_ws && (_ws.readyState === WebSocket.CONNECTING)) return _ws;
 
   _ws = new WebSocket(`${WS_BASE}/ws`);
 
   _ws.onopen = () => {
-    _ws!.send(JSON.stringify({ action: "auth", token: tok }));
+    // Re-read token at send time in case it was refreshed
+    const freshTok = getToken();
+    if (!freshTok) { _ws?.close(); return; }
+    _ws!.send(JSON.stringify({ action: "auth", token: freshTok }));
   };
 
   _ws.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data as string) as WSEvent;
+      // If auth failed, clear token and stop reconnecting
+      if (data["error"] && String(data["error"]).toLowerCase().includes("invalid")) {
+        setToken(null);
+        _ws?.close();
+        return;
+      }
       _wsCallbacks.forEach((cb) => cb(data));
     } catch { /* ignore */ }
   };
 
   _ws.onclose = () => {
     _ws = null;
-    // Reconnect after 5s
+    // Only reconnect if we still have a valid token
     if (_wsReconnectTimer) clearTimeout(_wsReconnectTimer);
     _wsReconnectTimer = setTimeout(() => {
       if (getToken()) connectWS();
@@ -385,8 +628,30 @@ export interface AIAnalysis {
   mitre_tactics: string[]; recommended_response: string;
 }
 
+export interface KillChainStage {
+  id: string;
+  label: string;
+  description: string;
+  icon: string;
+  color: string;
+  threats: Threat[];
+  total: number;
+  active: number;
+  critical: number;
+  compromised: boolean;
+}
+
 export interface KillChainStatus {
-  active_chains: number; chains: Array<{ id: string; stage: string; source: string }>;
+  stages: KillChainStage[];
+  total_threats: number;
+  stages_compromised: number;
+  attack_progress: number;
+  graph: {
+    nodes: Array<{ id: string; label: string; type: string; color?: string }>;
+    edges: Array<{ source: string; target: string; relation: string }>;
+    node_count: number;
+    edge_count: number;
+  };
 }
 
 export interface DatasetStatus {
@@ -411,4 +676,113 @@ export interface WizardQuestion {
   required?: boolean; options?: Array<{ value: string; label: string }>;
   help_text?: string; help_url?: string; current_value?: string;
   icon?: string;
+}
+
+// ── Live System types ─────────────────────────────────────────────────
+export interface LiveProcess {
+  pid: number;
+  name: string;
+  user: string;
+  cpu: number;
+  mem: number;
+  status: string;
+  exe: string;
+  cmd: string;
+  started: number;
+  suspicious: boolean;
+}
+
+export interface LiveProcessData {
+  processes: LiveProcess[];
+  total: number;
+  suspicious_count: number;
+}
+
+export interface LiveFile {
+  name: string;
+  path: string;
+  dir: string;
+  size: number;
+  ext: string;
+  modified: number;
+  risk: boolean;
+}
+
+export interface LiveFileData {
+  files: LiveFile[];
+  total_found: number;
+  scanned_dirs: number;
+  suspicious: LiveFile[];
+  suspicious_count: number;
+  dirs_scanned: string[];
+}
+
+export interface LiveNetworkStats {
+  connections: number;
+  listening: number;
+  blocked: number;
+  total_conns: number;
+  throughput_mb: number;
+  sent_mb_s: number;
+  recv_mb_s: number;
+  total_sent_mb: number;
+  total_recv_mb: number;
+  interfaces: Array<{ name: string; speed: number; mtu: number; up: boolean }>;
+}
+
+export interface DiskPartition {
+  device: string;
+  mountpoint: string;
+  fstype: string;
+  total_gb: number;
+  used_gb: number;
+  free_gb: number;
+  percent: number;
+}
+
+// ── Security Orchestrator types ───────────────────────────────────────
+export interface SecurityTaskSummary {
+  id: string;
+  status: string;
+  description: string;
+  created_at: string | null;
+  completed_at: string | null;
+  findings_count: number;
+}
+
+export interface SecurityTaskFinding {
+  type: string;
+  severity: string;
+  title: string;
+  description: string | null;
+  affected_resource: string | null;
+  created_at: string | null;
+}
+
+export interface SecurityTaskExecution {
+  id: string;
+  status: string;
+  duration_seconds: number | null;
+}
+
+export interface SecurityTaskDetail {
+  task_id: string;
+  status: string;
+  description: string;
+  created_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+  eicar_verified: boolean | null;
+  findings_count: number;
+  findings: SecurityTaskFinding[];
+  execution: SecurityTaskExecution | null;
+}
+
+export interface PipelineVerificationResult {
+  verified: boolean;
+  task_id: string;
+  eicar_sha256: string;
+  scanners_available: { yara: boolean; clamav: boolean };
+  findings: SecurityTaskFinding[];
+  error?: string;
 }

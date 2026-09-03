@@ -246,7 +246,7 @@ def generate_env() -> bool:
         pass
 
     ok(f".env created with auto-generated keys")
-    warn("Fill in ANTHROPIC_API_KEY / OPENAI_API_KEY for AI features")
+    warn("Add OPENROUTER_API_KEY to .env for AI features (https://openrouter.ai/keys)")
     warn("Fill in AISS_LICENSE_KEY for commercial use")
     return True
 

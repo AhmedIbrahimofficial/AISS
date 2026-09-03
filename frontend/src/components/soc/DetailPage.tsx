@@ -146,7 +146,7 @@ function ThreatDetail({ threat }: { threat: Threat }) {
         break;
       }
       case "Open Timeline":      void navigate({ to: "/threats" }); break;
-      case "View MITRE Mapping": void navigate({ to: "/mitre/t1566.001" }); break;
+      case "View MITRE Mapping": void navigate({ to: "/mitre/$tactic" as "/mitre/$tactic", params: { tactic: "t1566.001" } }); break;
       case "Run Playbook":       void navigate({ to: "/playbooks" }); break;
       case "Open Evidence":      void navigate({ to: "/forensics" }); break;
       case "Show Raw Logs":      void navigate({ to: "/logs" }); break;

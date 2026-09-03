@@ -57,6 +57,81 @@ def reload_rules():
     return get_rules() is not None
 
 
+def list_rules() -> list[dict]:
+    """List all YARA rule files and their rule count."""
+    yar_files = glob.glob(os.path.join(RULES_DIR, "*.yar"))
+    result = []
+    for f in sorted(yar_files):
+        name = Path(f).stem
+        try:
+            with open(f, "r", encoding="utf-8") as fh:
+                content = fh.read()
+            rule_count = content.count("\nrule ") + content.count("\nrule\t")
+            # Count from start of file too
+            if content.startswith("rule ") or content.startswith("rule\t"):
+                rule_count += 1
+        except Exception as e:
+            logger.debug(f"Could not read YARA rule file {f}: {e}")
+            rule_count = 0
+        result.append({
+            "file": os.path.basename(f),
+            "name": name,
+            "rule_count": rule_count,
+            "size_bytes": os.path.getsize(f),
+        })
+    return result
+
+
+def get_rule_stats() -> dict:
+    """Return total rule count and file statistics."""
+    rules = list_rules()
+    return {
+        "files": len(rules),
+        "total_rules": sum(r["rule_count"] for r in rules),
+        "rules_dir": RULES_DIR,
+        "rule_files": rules,
+    }
+
+
+async def auto_update_rules() -> bool:
+    """
+    Fetch YARA rules from a configurable remote URL on startup.
+    Set YARA_RULES_URL in .env to enable auto-update.
+    Rules are downloaded to the rules/ directory and merged with existing rules.
+    """
+    url = os.environ.get("YARA_RULES_URL", "").strip()
+    if not url:
+        return False
+
+    import urllib.request
+
+    logger.info(f"YARA auto-update: fetching rules from {url}")
+    try:
+        tmp_path = os.path.join(RULES_DIR, "_auto_update.yar.tmp")
+        urllib.request.urlretrieve(url, tmp_path)
+
+        # Validate by attempting compilation
+        try:
+            import yara
+            yara.compile(filepath=tmp_path)
+        except Exception as e:
+            logger.error(f"YARA auto-update: downloaded rules failed compilation: {e}")
+            os.remove(tmp_path)
+            return False
+
+        # Move to final location
+        dest = os.path.join(RULES_DIR, "auto_updated.yar")
+        os.replace(tmp_path, dest)
+        logger.info(f"✅ YARA auto-update: rules saved to {dest}")
+
+        # Reload rules
+        reload_rules()
+        return True
+    except Exception as e:
+        logger.error(f"YARA auto-update failed: {e}")
+        return False
+
+
 def scan_file(filepath: str) -> list[dict]:
     """
     Scan a file with compiled YARA rules.
@@ -142,7 +217,8 @@ def scan_process_memory(pid: int) -> list[dict]:
                     data = f.read(131072)  # 128KB
                 matches = scan_data(data, context=f"PID:{pid} map:{path}")
                 results.extend(matches)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"YARA memory-map scan failed for {path} (PID {pid}): {e}")
                 continue
 
     except Exception as e:

@@ -464,10 +464,54 @@ class ResponseEngine:
     # ── File quarantine ───────────────────────────────────────────────
 
     async def _quarantine_file(self, threat: Threat) -> str:
-        """Move a suspicious file to the quarantine directory."""
-        filepath = threat.source
-        if not os.path.isfile(filepath):
-            return f"File quarantine logged: {filepath} (file not found)"
+        """
+        Move a suspicious file to the quarantine directory.
+
+        Source resolution order:
+          1. If source is a real file path — use it directly.
+          2. If source is 'PID:NNN' — resolve the executable path from
+             the process (or from threat.metadata['exe_path']) and quarantine that.
+          3. If metadata contains 'exe_path' or 'path' — use that.
+        """
+        # Resolve the actual file path from whatever source we have
+        filepath: str = ""
+
+        source = threat.source or ""
+        meta   = threat.metadata or {}
+
+        if os.path.isfile(source):
+            filepath = source
+        elif source.startswith("PID:"):
+            # Try metadata first (fastest — already collected during evidence)
+            filepath = (
+                meta.get("exe_path") or
+                meta.get("exe") or
+                meta.get("path") or
+                ""
+            )
+            # If not in metadata, ask the OS
+            if not filepath and _PSUTIL:
+                raw_pid = source.split(":", 1)[1]
+                if raw_pid.isdigit():
+                    try:
+                        filepath = psutil.Process(int(raw_pid)).exe() or ""
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+        else:
+            # source might be a non-PID string; also check metadata fields
+            filepath = (
+                meta.get("exe_path") or
+                meta.get("exe") or
+                meta.get("path") or
+                source
+            )
+
+        if not filepath or not os.path.isfile(filepath):
+            return (
+                f"File quarantine logged: '{source}' "
+                f"(resolved path '{filepath}' not found on disk)"
+            )
+
         try:
             filename = os.path.basename(filepath)
             ts       = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -475,11 +519,11 @@ class ResponseEngine:
             shutil.move(filepath, dest)
 
             _rollback_log.append({
-                "action":    "quarantine_file",
-                "target":    filepath,
-                "timestamp": datetime.utcnow().isoformat(),
+                "action":         "quarantine_file",
+                "target":         filepath,
+                "timestamp":      datetime.utcnow().isoformat(),
                 "quarantine_path": dest,
-                "undo":      f"Move {dest} back to {filepath}",
+                "undo":           f"Move {dest} back to {filepath}",
             })
 
             note = f"File quarantined: {filepath} → {dest}"

@@ -10,6 +10,8 @@ from utils.logger import setup_logger
 logger = setup_logger("auth.email")
 
 # ── SMTP config from .env ─────────────────────────────────────────────
+_mail_configured = bool(os.environ.get("MAIL_USERNAME", "").strip())
+
 _conf = ConnectionConfig(
     MAIL_USERNAME   = os.environ.get("MAIL_USERNAME", ""),
     MAIL_PASSWORD   = os.environ.get("MAIL_PASSWORD", ""),
@@ -23,12 +25,26 @@ _conf = ConnectionConfig(
     VALIDATE_CERTS  = True,
 )
 
-_mailer = FastMail(_conf)
+_mailer = FastMail(_conf) if _mail_configured else None
 APP_URL = os.environ.get("APP_URL", "http://localhost:8000")
+
+if not _mail_configured:
+    logger.warning(
+        "SMTP not configured (MAIL_USERNAME empty). "
+        "Email sending is disabled — accounts will be auto-verified."
+    )
+
+
+def is_mail_configured() -> bool:
+    """Return True if SMTP credentials are set and emails can be sent."""
+    return _mail_configured
 
 
 async def send_verification_email(to_email: str, username: str, token: str) -> None:
-    """Send email verification link."""
+    """Send email verification link. Skips if SMTP not configured."""
+    if not _mail_configured or _mailer is None:
+        logger.info(f"SMTP not configured — skipping verification email to {to_email} (auto-verify)")
+        return
     verify_url = f"{APP_URL}/auth/verify-email?token={token}"
 
     html = f"""
@@ -62,7 +78,10 @@ async def send_verification_email(to_email: str, username: str, token: str) -> N
 
 
 async def send_otp_email(to_email: str, username: str, otp: str) -> None:
-    """Send OTP for phone/email 2FA."""
+    """Send OTP for phone/email 2FA. Skips if SMTP not configured."""
+    if not _mail_configured or _mailer is None:
+        logger.info(f"SMTP not configured — skipping OTP email to {to_email}")
+        return
     html = f"""
     <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px">
       <h2 style="color:#00ff88">Your AISS verification code</h2>
@@ -93,7 +112,10 @@ async def send_otp_email(to_email: str, username: str, otp: str) -> None:
 
 
 async def send_password_reset_email(to_email: str, username: str, token: str) -> None:
-    """Send password reset link."""
+    """Send password reset link. Skips if SMTP not configured."""
+    if not _mail_configured or _mailer is None:
+        logger.info(f"SMTP not configured — skipping password reset email to {to_email}")
+        return
     reset_url = f"{APP_URL}/auth/reset-password?token={token}"
     html = f"""
     <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px">

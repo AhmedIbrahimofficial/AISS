@@ -98,9 +98,16 @@ async def llm_providers():
     """Returns available LLM providers via the LLM router."""
     try:
         from modules.llm_router import llm_router
-        return llm_router.get_stats()
+        stats = llm_router.get_stats()
+        return {
+            "providers":      [stats["primary_model"]] if stats["available"] else [],
+            "total_providers": stats.get("fallback_count", 0) if stats["available"] else 0,
+            "available":      stats["available"],
+            "primary_model":  stats.get("primary_model", ""),
+            "provider":       stats.get("provider", "openrouter"),
+        }
     except Exception as e:
-        return {"error": str(e), "providers": []}
+        return {"error": str(e), "providers": [], "total_providers": 0, "available": False}
 
 
 @router.get("/semantic-store")

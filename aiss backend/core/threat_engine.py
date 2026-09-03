@@ -172,7 +172,12 @@ class ThreatEngine:
         })
 
     async def _monitor_loop(self) -> None:
-        """Main monitoring loop — polls all detection modules every 5 seconds."""
+        """Main monitoring loop — polls all detection modules every 5 seconds.
+
+        Each monitor runs in its own concurrent task so a slow or blocking
+        scan cannot stall the others. A per-monitor timeout prevents any single
+        monitor from hanging the loop indefinitely.
+        """
         from modules.network_monitor import NetworkMonitor
         from modules.auth_monitor   import AuthMonitor
         from modules.file_monitor   import FileMonitor
@@ -186,22 +191,24 @@ class ThreatEngine:
         ]
 
         while self.monitoring:
-            for monitor in monitors:
+            async def _run_one(monitor) -> None:
+                name = monitor.__class__.__name__
                 _t0 = time.time()
                 try:
-                    await monitor.scan()
+                    await asyncio.wait_for(monitor.scan(), timeout=25.0)
+                except asyncio.TimeoutError:
+                    logger.warning(f"Monitor timeout [{name}]: scan exceeded 25s")
                 except Exception as e:
-                    logger.error(f"Monitor error [{monitor.__class__.__name__}]: {e}")
+                    logger.error(f"Monitor error [{name}]: {e}")
                 finally:
                     try:
                         from core.metrics import observe_scan
-                        observe_scan(
-                            monitor.__class__.__name__.lower(),
-                            time.time() - _t0,
-                        )
+                        observe_scan(name.lower(), time.time() - _t0)
                     except Exception:
                         pass
-            await asyncio.sleep(5)
+
+            await asyncio.gather(*(_run_one(m) for m in monitors), return_exceptions=True)
+            await asyncio.sleep(15)
 
     # ══════════════════════════════════════════════════════════════════
     # Threat lifecycle

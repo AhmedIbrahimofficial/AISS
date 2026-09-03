@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AISS Security Report — {{ period_start }} to {{ period_end }}</title>
+<style>
+  @page { size: A4; margin: 20mm 15mm; }
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; color: #1a1a2e; background: #fff; }
+  h1 { font-size: 22pt; color: #0f3460; border-bottom: 3px solid #e94560; padding-bottom: 8px; }
+  h2 { font-size: 14pt; color: #0f3460; margin-top: 24px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+  h3 { font-size: 11pt; color: #16213e; margin-top: 14px; }
+  .header-bar { background: #0f3460; color: #fff; padding: 12px 16px; margin-bottom: 20px; }
+  .header-bar h1 { color: #fff; border: none; margin: 0; }
+  .header-bar p { margin: 4px 0 0; font-size: 10pt; opacity: 0.85; }
+  .score-box { display: inline-block; background: {% if security_score >= 70 %}#2d6a4f{% elif security_score >= 40 %}#e9a84c{% else %}#d62828{% endif %};
+               color: #fff; padding: 8px 20px; border-radius: 6px; font-size: 28pt; font-weight: bold; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 9pt; font-weight: bold; }
+  .badge-critical { background: #d62828; color: #fff; }
+  .badge-high { background: #e85d04; color: #fff; }
+  .badge-medium { background: #f4a261; color: #1a1a2e; }
+  .badge-low { background: #2d6a4f; color: #fff; }
+  .badge-info { background: #4a90d9; color: #fff; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 10pt; }
+  th { background: #0f3460; color: #fff; padding: 6px 8px; text-align: left; }
+  td { padding: 5px 8px; border-bottom: 1px solid #eee; }
+  tr:nth-child(even) td { background: #f8f9fa; }
+  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 12px 0; }
+  .stat-card { background: #f0f4f8; border-left: 4px solid #0f3460; padding: 8px 12px; border-radius: 4px; }
+  .stat-card .num { font-size: 20pt; font-weight: bold; color: #0f3460; }
+  .stat-card .lbl { font-size: 9pt; color: #555; }
+  .no-data { color: #888; font-style: italic; font-size: 10pt; }
+  .recommendation { background: #e8f4fd; border-left: 4px solid #4a90d9; padding: 8px 12px; margin: 6px 0; border-radius: 4px; }
+  .page-break { page-break-after: always; }
+  footer { font-size: 8pt; color: #888; text-align: center; margin-top: 30px; border-top: 1px solid #eee; padding-top: 8px; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header-bar">
+  <h1>AISS Security Report</h1>
+  <p>Period: {{ period_start }} – {{ period_end }} &nbsp;|&nbsp; Generated: {{ generated_at }} &nbsp;|&nbsp; Report ID: {{ report_id }}</p>
+</div>
+
+<!-- 1. EXECUTIVE SUMMARY -->
+<h2>1. Executive Summary</h2>
+<p>This automated weekly security report covers the period from <strong>{{ period_start }}</strong> to <strong>{{ period_end }}</strong>.
+The AISS platform analysed system health, network activity, security events, vulnerabilities, connected devices, and threat intelligence data.</p>
+<div class="summary-grid">
+  <div class="stat-card"><div class="num">{{ security_events|length }}</div><div class="lbl">Security Events</div></div>
+  <div class="stat-card"><div class="num">{{ threats|length }}</div><div class="lbl">Threats Detected</div></div>
+  <div class="stat-card"><div class="num">{{ vulnerabilities|length }}</div><div class="lbl">Vulnerabilities</div></div>
+  <div class="stat-card"><div class="num">{{ findings|length }}</div><div class="lbl">Findings</div></div>
+</div>
+
+<!-- 2. SECURITY SCORE -->
+<h2>2. Security Score</h2>
+<p>Overall risk score for this period:</p>
+<div class="score-box">{{ security_score }}/100</div>
+<p style="margin-top:8px;">
+{% if security_score >= 70 %}<strong>Status: Good</strong> — Security posture is acceptable.
+{% elif security_score >= 40 %}<strong>Status: Moderate</strong> — Attention required on highlighted findings.
+{% else %}<strong>Status: Critical</strong> — Immediate action required.{% endif %}
+</p>
+
+<!-- 3. SECURITY EVENTS -->
+<h2>3. Security Events</h2>
+{% if security_events %}
+<table><tr><th>Time</th><th>Type</th><th>Severity</th><th>Description</th></tr>
+{% for e in security_events[:30] %}
+<tr><td>{{ e.get('created_at','') }}</td><td>{{ e.get('event_type','') }}</td>
+<td><span class="badge badge-{{ e.get('severity','info') }}">{{ e.get('severity','') }}</span></td>
+<td>{{ e.get('description','')[:120] }}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="no-data">No security events recorded during this period.</p>{% endif %}
+
+<!-- 4. THREATS DETECTED -->
+<h2>4. Threats Detected</h2>
+{% if threats %}
+<table><tr><th>Detected</th><th>Type</th><th>Severity</th><th>Source IP</th><th>Status</th></tr>
+{% for t in threats[:30] %}
+<tr><td>{{ t.get('detected_at','') }}</td><td>{{ t.get('threat_type','') }}</td>
+<td><span class="badge badge-{{ t.get('severity','medium') }}">{{ t.get('severity','') }}</span></td>
+<td>{{ t.get('source_ip','') }}</td><td>{{ t.get('status','') }}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="no-data">No threats detected during this period.</p>{% endif %}
+
+<!-- 5. VULNERABILITIES -->
+<h2>5. Vulnerabilities</h2>
+{% if vulnerabilities %}
+<table><tr><th>ID</th><th>Type</th><th>Severity</th><th>Description</th></tr>
+{% for v in vulnerabilities[:20] %}
+<tr><td>{{ v.get('id','')[:8] }}</td><td>{{ v.get('threat_type','') }}</td>
+<td><span class="badge badge-{{ v.get('severity','medium') }}">{{ v.get('severity','') }}</span></td>
+<td>{{ v.get('description','')[:150] }}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="no-data">No vulnerabilities found during this period.</p>{% endif %}
+
+<!-- 6. CRITICAL FINDINGS -->
+<h2>6. Critical Findings</h2>
+{% set critical_findings = findings | selectattr('severity', 'equalto', 'critical') | list %}
+{% if critical_findings %}
+{% for f in critical_findings %}
+<div style="background:#fff5f5;border-left:4px solid #d62828;padding:8px 12px;margin:6px 0;border-radius:4px;">
+<strong>{{ f.get('title','') }}</strong><br>
+<span class="badge badge-critical">CRITICAL</span> &nbsp; {{ f.get('finding_type','') }}<br>
+<small>Affected: {{ f.get('affected_resource','') }}</small><br>
+<small>{{ f.get('description','')[:200] }}</small>
+</div>{% endfor %}
+{% else %}<p class="no-data">No critical findings during this period.</p>{% endif %}
+
+<div class="page-break"></div>
+
+<!-- 7. NETWORK ACTIVITY SUMMARY -->
+<h2>7. Network Activity Summary</h2>
+{% if network_summary %}
+<table><tr><th>Metric</th><th>Value</th></tr>
+{% for k, v in network_summary.items() %}
+<tr><td>{{ k }}</td><td>{{ v }}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="no-data">No network activity data available.</p>{% endif %}
+
+<!-- 8. DEVICE STATUS -->
+<h2>8. Device Status</h2>
+{% if device_status %}
+<table><tr><th>Device</th><th>Role</th><th>Active</th><th>Last Login</th></tr>
+{% for d in device_status[:20] %}
+<tr><td>{{ d.get('username','') }}</td><td>{{ d.get('role','') }}</td>
+<td>{{ 'Yes' if d.get('is_active') else 'No' }}</td><td>{{ d.get('last_login','') }}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="no-data">No device status data available.</p>{% endif %}
+
+<!-- 9. SUSPICIOUS PROCESSES -->
+<h2>9. Suspicious Processes</h2>
+{% set susp_processes = findings | selectattr('finding_type', 'equalto', 'suspicious_process') | list %}
+{% if susp_processes %}
+{% for p in susp_processes %}
+<div class="recommendation"><strong>{{ p.get('title','') }}</strong> — {{ p.get('description','')[:200] }}</div>
+{% endfor %}
+{% else %}<p class="no-data">No suspicious processes identified.</p>{% endif %}
+
+<!-- 10. MALWARE / FILE ANALYSIS -->
+<h2>10. Malware / File Analysis</h2>
+{% set malware = findings | selectattr('finding_type', 'in', ['malware', 'file_threat']) | list %}
+{% if malware %}
+{% for m in malware %}
+<div style="background:#fff5f5;border-left:4px solid #e85d04;padding:8px 12px;margin:6px 0;border-radius:4px;">
+<strong>{{ m.get('title','') }}</strong> — {{ m.get('affected_resource','') }}
+</div>{% endfor %}
+{% else %}<p class="no-data">No malware or malicious files detected.</p>{% endif %}
+
+<!-- 11. AUTHENTICATION / SECURITY EVENTS -->
+<h2>11. Authentication &amp; Security Events</h2>
+{% set auth_events = security_events | selectattr('event_type', 'in', ['login', 'logout', 'failed_login', 'account_locked']) | list %}
+{% if auth_events %}
+<table><tr><th>Time</th><th>Event</th><th>User</th><th>IP</th></tr>
+{% for e in auth_events[:20] %}
+<tr><td>{{ e.get('created_at','') }}</td><td>{{ e.get('event_type','') }}</td>
+<td>{{ e.get('username','') }}</td><td>{{ e.get('ip_address','') }}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="no-data">No authentication events recorded.</p>{% endif %}
+
+<!-- 12. AUDIT ACTIVITY -->
+<h2>12. Audit Activity</h2>
+{% if audit_summary %}
+<table><tr><th>Metric</th><th>Count</th></tr>
+{% for k, v in audit_summary.items() %}
+<tr><td>{{ k }}</td><td>{{ v }}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="no-data">No audit data available.</p>{% endif %}
+
+<!-- 13. MITRE ATT&CK MAPPING -->
+<h2>13. MITRE ATT&amp;CK Mapping</h2>
+{% if mitre_mappings %}
+<table><tr><th>Technique ID</th><th>Name</th><th>Tactic</th></tr>
+{% for m in mitre_mappings %}
+<tr><td>{{ m.get('id','') }}</td><td>{{ m.get('name','') }}</td>
+<td>{{ m.get('tactic','') | join(', ') if m.get('tactic') is iterable else m.get('tactic','') }}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="no-data">No MITRE ATT&amp;CK mappings identified.</p>{% endif %}
+
+<div class="page-break"></div>
+
+<!-- 14 & 15: RESOLVED / UNRESOLVED INCIDENTS -->
+<h2>14. Resolved Incidents</h2>
+{% set resolved = threats | selectattr('status', 'equalto', 'resolved') | list %}
+{% if resolved %}
+<table><tr><th>Type</th><th>Severity</th><th>Resolved At</th></tr>
+{% for t in resolved[:10] %}<tr><td>{{ t.get('threat_type','') }}</td>
+<td>{{ t.get('severity','') }}</td><td>{{ t.get('resolved_at','') }}</td></tr>{% endfor %}
+</table>{% else %}<p class="no-data">No resolved incidents.</p>{% endif %}
+
+<h2>15. Unresolved Incidents</h2>
+{% set unresolved = threats | selectattr('status', 'in', ['active','analyzing','responding']) | list %}
+{% if unresolved %}
+<table><tr><th>Type</th><th>Severity</th><th>Detected</th><th>Status</th></tr>
+{% for t in unresolved[:10] %}<tr><td>{{ t.get('threat_type','') }}</td>
+<td><span class="badge badge-{{ t.get('severity','medium') }}">{{ t.get('severity','') }}</span></td>
+<td>{{ t.get('detected_at','') }}</td><td>{{ t.get('status','') }}</td></tr>{% endfor %}
+</table>{% else %}<p class="no-data">No unresolved incidents.</p>{% endif %}
+
+<!-- 16. RISK TRENDS -->
+<h2>16. Risk Trends</h2>
+<p>Security score this period: <strong>{{ security_score }}/100</strong></p>
+<p class="no-data">Historical trend data requires multiple report periods.</p>
+
+<!-- 17. RECOMMENDATIONS -->
+<h2>17. Recommendations</h2>
+{% if recommendations %}
+{% for r in recommendations %}
+<div class="recommendation">{{ loop.index }}. {{ r }}</div>
+{% endfor %}
+{% else %}<p class="no-data">No specific recommendations at this time.</p>{% endif %}
+
+<!-- 18. ACTIONS TAKEN -->
+<h2>18. Actions Taken This Period</h2>
+{% if audit_summary %}
+<p>{{ audit_summary.get('total_agent_actions', 0) }} automated agent actions were executed during this period.</p>
+{% else %}<p class="no-data">No automated actions recorded.</p>{% endif %}
+
+<!-- 19. ACTIONS REQUIRING ATTENTION -->
+<h2>19. Actions Requiring Attention</h2>
+{% set pending = findings | selectattr('resolved_at', 'none') | list %}
+{% if pending %}
+{% for f in pending[:10] %}
+<div class="recommendation"><strong>{{ f.get('title','') }}</strong> ({{ f.get('severity','') }}) — {{ f.get('recommendation','Review and remediate.') }}</div>
+{% endfor %}
+{% else %}<p class="no-data">No pending actions.</p>{% endif %}
+
+<!-- 20. NEXT 7-DAY RECOMMENDATIONS -->
+<h2>20. Next 7-Day Recommendations</h2>
+{% if recommendations %}
+{% for r in recommendations[:5] %}
+<div class="recommendation">&#9654; {{ r }}</div>
+{% endfor %}
+{% else %}
+<div class="recommendation">&#9654; Continue regular vulnerability scanning and patch management.</div>
+<div class="recommendation">&#9654; Review all active alerts and resolve or escalate within SLA.</div>
+<div class="recommendation">&#9654; Verify all connected devices are authorised.</div>
+{% endif %}
+
+<footer>
+  AISS Security Platform &nbsp;|&nbsp; Report ID: {{ report_id }} &nbsp;|&nbsp;
+  Generated: {{ generated_at }} &nbsp;|&nbsp; Confidential — For Authorised Personnel Only
+</footer>
+</body>
+</html>

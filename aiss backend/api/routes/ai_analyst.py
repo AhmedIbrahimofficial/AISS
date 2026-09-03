@@ -1,38 +1,43 @@
-"""AISS - AI Analyst API Routes
-Supports both Anthropic Claude and OpenAI via unified AIAnalyst provider.
+"""AISS — AI Analyst API Routes (OpenRouter)
+
+All AI analysis goes through OpenRouter via the shared llm_router.
+Set OPENROUTER_API_KEY in .env — no other AI key required.
 """
-import os
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import Response
 from pydantic import BaseModel
+
 from core.dependencies import get_engine_authenticated
 from core.threat_engine import ThreatEngine
+from modules.llm_router import llm_router
 
 router = APIRouter()
 
 
 class AnalysisRequest(BaseModel):
     threat_id:  str
+    # Kept for backward compat — ignored
     api_key:    str  = ""
-    provider:   str  = "auto"   # "auto" | "claude" | "openai"
-    async_mode: bool = False    # True → return Celery task ID immediately
+    provider:   str  = "auto"
+    async_mode: bool = False
 
 
 class ReportRequest(BaseModel):
+    # Kept for backward compat — ignored
     api_key:  str = ""
     provider: str = "auto"
-    format:   str = "json"      # "json" | "pdf"
+    format:   str = "json"   # "json" | "pdf"
 
 
-def _resolve_key(request_key: str) -> str:
-    """Pick the best available API key."""
-    k = request_key or os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
-    if not k:
+def _check_llm_available() -> None:
+    if not llm_router.is_available():
         raise HTTPException(
             status_code=400,
-            detail="No AI API key configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env"
+            detail=(
+                "OPENROUTER_API_KEY is not configured. "
+                "Add your key to .env: https://openrouter.ai/keys"
+            ),
         )
-    return k
 
 
 @router.post("/analyze")
@@ -40,25 +45,28 @@ async def analyze_threat(
     request: AnalysisRequest,
     engine:  ThreatEngine = Depends(get_engine_authenticated),
 ):
-    threat  = engine.active_threats.get(request.threat_id)
+    _check_llm_available()
+
+    threat = engine.active_threats.get(request.threat_id)
     if not threat:
-        raise HTTPException(status_code=404, detail="Threat not found")
+        raise HTTPException(status_code=404, detail="Threat not found in active threat store")
 
-    api_key = _resolve_key(request.api_key)
-
-    # ── Async Celery mode ─────────────────────────────────────────────
+    # Async Celery mode — try first, fall through to sync if Redis not running
     if request.async_mode:
         try:
             from tasks import ai_analyze_task
-            task = ai_analyze_task.delay(threat.to_dict(), api_key)
-            return {"mode": "async", "task_id": task.id,
-                    "status": "queued", "poll_url": f"/api/ai/task/{task.id}"}
+            task = ai_analyze_task.delay(threat.to_dict(), "")
+            return {
+                "mode": "async",
+                "task_id": task.id,
+                "status": "queued",
+                "poll_url": f"/api/ai/task/{task.id}",
+            }
         except Exception:
-            pass  # Celery not running — fall through to sync
+            pass  # Celery/Redis not running — fall through to sync
 
-    # ── Sync mode ─────────────────────────────────────────────────────
     from modules.ai_analyst import AIAnalyst
-    analyst  = AIAnalyst(api_key=api_key, provider=request.provider)
+    analyst  = AIAnalyst()
     analysis = await analyst.analyze_threat(threat)
 
     threat.ai_analysis        = analysis.get("threat_assessment", "")
@@ -67,7 +75,7 @@ async def analyze_threat(
     return {
         "threat_id":   request.threat_id,
         "threat_type": str(threat.type),
-        "provider":    analyst.provider,
+        "provider":    "openrouter",
         "analysis":    analysis,
     }
 
@@ -78,12 +86,12 @@ async def get_task_status(task_id: str):
     try:
         from modules.celery_app import celery_app
         result = celery_app.AsyncResult(task_id)
-        resp = {"task_id": task_id, "status": result.status}
+        resp: dict = {"task_id": task_id, "status": result.status}
         if result.ready():
             resp["result"] = result.get(timeout=1)
         return resp
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {exc}")
 
 
 @router.post("/report")
@@ -91,13 +99,14 @@ async def generate_report(
     request: ReportRequest,
     engine:  ThreatEngine = Depends(get_engine_authenticated),
 ):
-    api_key = _resolve_key(request.api_key)
+    _check_llm_available()
+
     threats = engine.get_all_threats()
     if not threats:
-        return {"report": "No threats recorded yet."}
+        return {"report": "No threats recorded yet.", "threat_count": 0}
 
     from modules.ai_analyst import AIAnalyst
-    analyst = AIAnalyst(api_key=api_key, provider=request.provider)
+    analyst = AIAnalyst()
 
     if request.format == "pdf":
         pdf_bytes = await analyst.generate_pdf_report(threats)
@@ -109,4 +118,8 @@ async def generate_report(
         )
 
     report = await analyst.generate_report(threats)
-    return {"report": report, "threat_count": len(threats), "provider": analyst.provider}
+    return {
+        "report":       report,
+        "threat_count": len(threats),
+        "provider":     "openrouter",
+    }

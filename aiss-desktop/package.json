@@ -1,0 +1,62 @@
+{
+  "name": "aiss-desktop",
+  "version": "1.0.0",
+  "description": "AISS - AI Integrated Security System Desktop Application",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "npm run build && electron dist/main.js",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "typescript": "^5.6.0"
+  },
+  "build": {
+    "appId": "com.aiss.desktop",
+    "productName": "AISS",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "splash.html",
+      "assets/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "extraResources": [
+      {
+        "from": "../aiss backend",
+        "to": "backend",
+        "filter": ["**/*", "!**/__pycache__/**", "!**/.venv/**", "!**/node_modules/**"]
+      },
+      {
+        "from": "../frontend",
+        "to": "frontend",
+        "filter": ["dist/**/*"]
+      }
+    ]
+  }
+}

@@ -26,6 +26,11 @@ from utils.logger import setup_logger
 
 logger = setup_logger("auth_monitor")
 
+
+def _subproc_run(*args, **kwargs) -> subprocess.CompletedProcess:
+    """Wrapper so asyncio.to_thread can call subprocess.run safely."""
+    return subprocess.run(*args, **kwargs)
+
 IS_WINDOWS = sys.platform == "win32"
 
 # ── Thresholds ────────────────────────────────────────────────────────
@@ -248,7 +253,8 @@ class AuthMonitor:
     async def _check_windows_failed_logins(self) -> None:
         """Parse Windows Security event log for failed logon events (Event ID 4625)."""
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                _subproc_run,
                 [
                     "powershell", "-NoProfile", "-Command",
                     (
@@ -386,7 +392,8 @@ class AuthMonitor:
     async def _check_windows_privilege_events(self) -> None:
         """Check for privilege escalation events (Event ID 4672)."""
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                _subproc_run,
                 [
                     "powershell", "-NoProfile", "-Command",
                     (
@@ -422,7 +429,8 @@ class AuthMonitor:
             log_files = ["/var/log/auth.log", "/var/log/secure"]
             for log_file in log_files:
                 try:
-                    result = subprocess.run(
+                    result = await asyncio.to_thread(
+                        _subproc_run,
                         ["tail", "-n", "200", log_file],
                         capture_output=True, text=True, timeout=5
                     )
@@ -499,7 +507,8 @@ class AuthMonitor:
     async def _check_privilege_escalation(self) -> None:
         """Check for unexpected SUID binaries (Linux privilege escalation)."""
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                _subproc_run,
                 ["find", "/usr/bin", "/bin", "-perm", "-4000", "-type", "f"],
                 capture_output=True, text=True, timeout=10
             )
@@ -524,7 +533,8 @@ class AuthMonitor:
     async def _check_sudo_abuse(self) -> None:
         """Check for unauthorized sudo attempts."""
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                _subproc_run,
                 ["grep", "-i", "sudo", "/var/log/auth.log"],
                 capture_output=True, text=True, timeout=5
             )
@@ -549,7 +559,7 @@ class AuthMonitor:
         """Alert if any blacklisted (and not yet expired) IP has active connections."""
         try:
             import psutil
-            conns = psutil.net_connections(kind="tcp")
+            conns = await asyncio.to_thread(psutil.net_connections, kind="tcp")
             for c in conns:
                 if not c.raddr:
                     continue

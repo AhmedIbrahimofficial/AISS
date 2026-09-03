@@ -31,16 +31,6 @@ export const THREAT_TYPES = [
   "APT Chain Detected",
 ];
 
-export function randomIp() {
-  const pools = ["192.168.1.", "10.0.4.", "172.16.9.", "45.83.12.", "203.0.113."];
-  const prefix = pools[Math.floor(Math.random() * pools.length)] ?? "10.0.0.";
-  return prefix + (10 + Math.floor(Math.random() * 240));
-}
-
-export function randomAsset() {
-  return `EPA-${100 + Math.floor(Math.random() * 899)}`;
-}
-
 export function severityFor(type: string): Severity {
   if (["Ransomware", "APT Chain Detected", "Data Exfiltration", "C2 Traffic"].includes(type))
     return "CRITICAL";

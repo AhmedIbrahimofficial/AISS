@@ -3,11 +3,17 @@ Maps detected threats to MITRE/Lockheed Martin kill chain stages.
 Uses networkx to build a directed threat graph (nodes=threats, edges=causal/campaign links).
 """
 
+import asyncio
+import time as _time
 from fastapi import APIRouter, Depends
 from core.dependencies import get_engine
 from core.threat_engine import ThreatEngine
 
 router = APIRouter()
+
+# Simple in-process cache (10-second TTL) so the heavy graph build doesn't block
+_kill_chain_cache: dict = {"data": None, "ts": 0.0}
+_KILL_CHAIN_TTL = 30.0
 
 # ── Stage mapping ─────────────────────────────────────────────────────
 STAGE_MAP = {
@@ -118,61 +124,71 @@ LABEL_TO_ID = {s["label"]: s["id"] for s in STAGES}
 @router.get("/kill-chain")
 async def get_kill_chain(engine: ThreatEngine = Depends(get_engine)):
     """
-    Returns all threats grouped by kill chain stage,
-    plus a networkx-derived node/edge graph for the frontend.
+    Returns all threats grouped by kill chain stage.
+    Entire computation runs in a thread-pool executor to avoid blocking
+    the async event loop during concurrent threat scans.
+    Cached for 30 seconds.
     """
-    all_threats = engine.get_all_threats()
+    global _kill_chain_cache
+    now = _time.monotonic()
+    if _kill_chain_cache["data"] is not None and (now - _kill_chain_cache["ts"]) < _KILL_CHAIN_TTL:
+        return _kill_chain_cache["data"]
 
-    # Group threats by stage
-    stage_threats: dict[str, list] = {s["id"]: [] for s in STAGES}
+    def _compute() -> dict:
+        all_threats = engine.get_all_threats()
 
-    for threat in all_threats:
-        threat_type  = threat.get("type", "")
-        stage_label  = STAGE_MAP.get(threat_type, "")
-        stage_id     = LABEL_TO_ID.get(stage_label, "")
-        if stage_id:
-            stage_threats[stage_id].append(threat)
+        # Limit to most recent 200 threats
+        if len(all_threats) > 200:
+            all_threats = sorted(
+                all_threats,
+                key=lambda t: t.get("detected_at", ""),
+                reverse=True,
+            )[:200]
 
-    # Build response
-    result = []
-    for stage in STAGES:
-        sid      = stage["id"]
-        threats  = stage_threats[sid]
-        active   = sum(1 for t in threats if t.get("status") == "active")
-        critical = sum(1 for t in threats if t.get("severity") == "critical")
+        # Group by stage
+        stage_threats: dict[str, list] = {s["id"]: [] for s in STAGES}
+        for threat in all_threats:
+            stage_label = STAGE_MAP.get(threat.get("type", ""), "")
+            stage_id    = LABEL_TO_ID.get(stage_label, "")
+            if stage_id:
+                stage_threats[stage_id].append(threat)
 
-        result.append({
-            **stage,
-            "threats":     threats,
-            "total":       len(threats),
-            "active":      active,
-            "critical":    critical,
-            "compromised": len(threats) > 0,
-        })
+        result = []
+        for stage in STAGES:
+            sid     = stage["id"]
+            threats = stage_threats[sid]
+            result.append({
+                **stage,
+                "threats":     threats[:10],  # cap per-stage list for JSON size
+                "total":       len(threats),
+                "active":      sum(1 for t in threats if t.get("status") == "active"),
+                "critical":    sum(1 for t in threats if t.get("severity") == "critical"),
+                "compromised": len(threats) > 0,
+            })
 
-    total_compromised = sum(1 for s in result if s["compromised"])
+        total_compromised = sum(1 for s in result if s["compromised"])
+        graph = _build_threat_graph(all_threats, result)
 
-    # ── NetworkX threat graph ─────────────────────────────────────────
-    graph = _build_threat_graph(all_threats, result)
+        return {
+            "stages":             result,
+            "total_threats":      len(all_threats),
+            "stages_compromised": total_compromised,
+            "attack_progress":    round((total_compromised / len(STAGES)) * 100),
+            "graph":              graph,
+        }
 
-    return {
-        "stages":             result,
-        "total_threats":      len(all_threats),
-        "stages_compromised": total_compromised,
-        "attack_progress":    round((total_compromised / len(STAGES)) * 100),
-        "graph":              graph,
-    }
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, _compute)
+    _kill_chain_cache["data"] = response
+    _kill_chain_cache["ts"]   = _time.monotonic()
+    return response
 
 
 def _build_threat_graph(all_threats: list, stages: list) -> dict:
     """
     Build a directed threat graph using networkx.
-
-    Nodes: threats + stage nodes
-    Edges:
-      - threat → stage (belongs_to)
-      - campaign.linked_threats → causal links
-      - same source IP threats → temporal edges
+    Nodes: stage nodes + top 50 threats per severity
+    Edges: threat → stage (belongs_to) only (temporal edges skipped for performance)
     """
     try:
         import networkx as nx
@@ -189,8 +205,10 @@ def _build_threat_graph(all_threats: list, stages: list) -> dict:
                 compromised=stage["compromised"],
             )
 
-        # ── Threat nodes ──────────────────────────────────────────────
-        for t in all_threats:
+        # ── Limit threat nodes to 50 most recent to keep graph fast ──
+        sample = sorted(all_threats, key=lambda t: t.get("detected_at", ""), reverse=True)[:50]
+
+        for t in sample:
             tid = t.get("id", "")
             G.add_node(
                 tid,
@@ -201,55 +219,18 @@ def _build_threat_graph(all_threats: list, stages: list) -> dict:
                 type="threat",
             )
             # Edge: threat → stage
-            threat_type = t.get("type", "")
-            stage_label = STAGE_MAP.get(threat_type, "")
+            stage_label = STAGE_MAP.get(t.get("type", ""), "")
             stage_id    = LABEL_TO_ID.get(stage_label, "")
             if stage_id:
                 G.add_edge(tid, f"stage:{stage_id}", relation="belongs_to")
 
-        # ── Campaign causal links ─────────────────────────────────────
-        for t in all_threats:
-            meta = t.get("metadata") or {}
-            if meta.get("campaign"):
-                linked = meta.get("linked_threats", [])
-                for ltid in linked:
-                    if G.has_node(ltid) and G.has_node(t.get("id", "")):
-                        G.add_edge(ltid, t.get("id", ""), relation="campaign_link")
-
-        # ── Same-source temporal links ────────────────────────────────
-        from collections import defaultdict
-        by_source: dict[str, list] = defaultdict(list)
-        for t in all_threats:
-            src = t.get("source", "")
-            if src and not src.startswith("PID:"):
-                by_source[src].append(t)
-
-        for src, threats in by_source.items():
-            if len(threats) > 1:
-                # Sort by detected_at, add temporal edges
-                sorted_threats = sorted(threats, key=lambda x: x.get("detected_at", ""))
-                for i in range(len(sorted_threats) - 1):
-                    a = sorted_threats[i].get("id", "")
-                    b = sorted_threats[i+1].get("id", "")
-                    if G.has_node(a) and G.has_node(b) and not G.has_edge(a, b):
-                        G.add_edge(a, b, relation="temporal_sequence")
-
-        # ── Serialize to JSON-safe format ─────────────────────────────
-        nodes = [
-            {"id": n, **G.nodes[n]}
-            for n in G.nodes()
-        ]
+        # ── Serialize ─────────────────────────────────────────────────
+        nodes = [{"id": n, **G.nodes[n]} for n in G.nodes()]
         edges = [
             {"source": u, "target": v, "relation": G.edges[u, v].get("relation", "")}
             for u, v in G.edges()
         ]
-
-        return {
-            "nodes":      nodes,
-            "edges":      edges,
-            "node_count": len(nodes),
-            "edge_count": len(edges),
-        }
+        return {"nodes": nodes, "edges": edges, "node_count": len(nodes), "edge_count": len(edges)}
 
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return {"nodes": [], "edges": [], "error": str(e), "node_count": 0, "edge_count": 0}

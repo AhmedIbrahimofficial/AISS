@@ -20,6 +20,7 @@ import asyncio
 import collections
 import socket
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 from typing import Optional
@@ -61,6 +62,8 @@ _iforest_model = None
 _iforest_samples: list[list] = []
 IFOREST_MIN_SAMPLES = 100   # train after this many samples
 IFOREST_RETRAIN_EVERY = 500  # retrain periodically
+IFOREST_MAX_SAMPLES = 500    # cap training set size
+IFOREST_ESTIMATORS = 20      # keep model lightweight
 
 def _update_iforest(features: list[float]) -> float:
     """
@@ -79,9 +82,12 @@ def _update_iforest(features: list[float]) -> float:
         try:
             from sklearn.ensemble import IsolationForest
             import numpy as np
-            X = np.array(_iforest_samples[-2000:])  # keep last 2000 samples
+            X = np.array(_iforest_samples[-IFOREST_MAX_SAMPLES:])
             _iforest_model = IsolationForest(
-                n_estimators=100, contamination=0.05, random_state=42
+                n_estimators=IFOREST_ESTIMATORS,
+                contamination=0.05,
+                random_state=42,
+                n_jobs=1,
             )
             _iforest_model.fit(X)
             logger.info(f"IsolationForest retrained on {len(X)} network samples")
@@ -96,10 +102,22 @@ def _update_iforest(features: list[float]) -> float:
         import numpy as np
         pred = _iforest_model.predict(np.array([features]))
         return float(pred[0])  # -1 = anomaly
-    except Exception:
+    except Exception as e:
+        logger.debug(f"IsolationForest prediction failed: {e}")
         return 0.0
 
 import threading
+
+# ── Helpers to run CPU-heavy sync work off the asyncio event loop ─────
+def _river_score_and_learn(river_model, features: list[float], lock: threading.Lock) -> float:
+    with lock:
+        global _river_count
+        _river_count += 1
+        x = {f"f{i}": v for i, v in enumerate(features)}
+        score = river_model.score_one(x)
+        river_model.learn_one(x)
+    return score
+
 
 # ── Baselines & state ─────────────────────────────────────────────────
 _dns_baseline: dict[str, str] = {}
@@ -187,9 +205,15 @@ class NetworkMonitor:
             return
         try:
             now = time.time()
-            conns = psutil.net_connections(kind="tcp")
+            conns = await asyncio.to_thread(psutil.net_connections, kind="tcp")
 
-            for c in conns:
+            # Update global models once per scan (not per connection) to avoid GIL contention
+            last_features: Optional[list[float]] = None
+
+            for idx, c in enumerate(conns):
+                # Yield to the event loop periodically so HTTP requests remain responsive
+                if idx and idx % 50 == 0:
+                    await asyncio.sleep(0)
                 if not c.raddr:
                     continue
                 rip   = c.raddr.ip
@@ -215,51 +239,49 @@ class NetworkMonitor:
                     if now - t < VELOCITY_WINDOW_SECS
                 ]
 
-                # ── River + IsolationForest anomaly scoring ──────────────
+                # ── River online anomaly scoring ─────────────────────────
                 # Feature vector: [rport, connection_count, remote_ip_int]
                 features = [
                     float(rport),
                     float(len(_connection_graph[rip])),
                     sum(int(x) * (256 ** (3-i)) for i, x in enumerate(rip.split("."))),
                 ]
+                last_features = features
 
                 river_model = _get_river_model()
                 if river_model:
-                    with _river_lock:
-                        global _river_count
-                        _river_count += 1
-                        x = {f"f{i}": v for i, v in enumerate(features)}
-                        score = river_model.score_one(x)
-                        river_model.learn_one(x)
+                    score = await asyncio.to_thread(
+                        _river_score_and_learn, river_model, features, _river_lock
+                    )
 
-                        # Alert if River says anomaly (score > 0.8) AND disagrees with dataset
-                        ds_anomaly = dataset_loader.is_network_anomaly("count", len(_connection_graph[rip]))
-                        if score > 0.8 and not ds_anomaly:
-                            key = f"river:{rip}:{rport}"
-                            if key not in _reported_conns:
-                                await self._report(
-                                    ThreatType.INTRUSION, ThreatSeverity.HIGH,
-                                    f"River anomaly (online ML): {rip}:{rport} score={score:.2f} "
-                                    f"(dataset disagrees — potential novel attack)",
-                                    rip,
-                                    {"remote_ip": rip, "remote_port": rport,
-                                     "river_score": round(score, 3),
-                                     "dataset_flagged": False,
-                                     "detection": "online_ml_disagreement"}
-                                )
-                                _reported_conns.add(key)
+                    # Alert if River says anomaly (score > 0.8) AND disagrees with dataset
+                    ds_anomaly = dataset_loader.is_network_anomaly("count", len(_connection_graph[rip]))
+                    if score > 0.8 and not ds_anomaly:
+                        key = f"river:{rip}:{rport}"
+                        if key not in _reported_conns:
+                            await self._report(
+                                ThreatType.INTRUSION, ThreatSeverity.HIGH,
+                                f"River anomaly (online ML): {rip}:{rport} score={score:.2f} "
+                                f"(dataset disagrees — potential novel attack)",
+                                rip,
+                                {"remote_ip": rip, "remote_port": rport,
+                                 "river_score": round(score, 3),
+                                 "dataset_flagged": False,
+                                 "detection": "online_ml_disagreement"}
+                            )
+                            _reported_conns.add(key)
 
-                # IsolationForest batch scoring
-                iforest_pred = _update_iforest(features)
+            # IsolationForest batch scoring once per scan (CPU-bound, run in thread)
+            if last_features is not None:
+                iforest_pred = await asyncio.to_thread(_update_iforest, last_features)
                 if iforest_pred == -1:
-                    key = f"iforest:{rip}:{rport}"
+                    key = f"iforest:batch:{now}"
                     if key not in _reported_conns:
                         await self._report(
                             ThreatType.INTRUSION, ThreatSeverity.MEDIUM,
-                            f"IsolationForest anomaly: {rip}:{rport} (batch ML)",
-                            rip,
-                            {"remote_ip": rip, "remote_port": rport,
-                             "detection": "batch_ml"}
+                            "IsolationForest anomaly detected in current network batch",
+                            "network_batch",
+                            {"detection": "batch_ml", "sample_count": len(conns)}
                         )
                         _reported_conns.add(key)
 
@@ -358,8 +380,8 @@ class NetworkMonitor:
                 for k in old_keys:
                     del _dns_query_tracker[k]
 
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"DNS integrity check failed: {e}")
 
     # ── 3. Port scan detection ────────────────────────────────────────
 
@@ -372,7 +394,7 @@ class NetworkMonitor:
             return
         try:
             now   = time.time()
-            conns = psutil.net_connections(kind="tcp")
+            conns = await asyncio.to_thread(psutil.net_connections, kind="tcp")
 
             # Rebuild port scan tracker from current connection snapshot
             for c in conns:
@@ -423,7 +445,7 @@ class NetworkMonitor:
             return
         try:
             now   = time.time()
-            conns = psutil.net_connections(kind="tcp")
+            conns = await asyncio.to_thread(psutil.net_connections, kind="tcp")
 
             for c in conns:
                 if not c.raddr or c.status != "ESTABLISHED":
@@ -491,7 +513,9 @@ class NetworkMonitor:
             return
         try:
             now = time.time()
-            for proc in psutil.process_iter(attrs=["pid", "name"]):
+            for proc in await asyncio.to_thread(
+                lambda: list(psutil.process_iter(attrs=["pid", "name"]))
+            ):
                 try:
                     pid  = proc.pid
                     name = proc.name()
@@ -548,7 +572,7 @@ class NetworkMonitor:
         if not _PSUTIL:
             return
         try:
-            conns = psutil.net_connections(kind="tcp")
+            conns = await asyncio.to_thread(psutil.net_connections, kind="tcp")
             # Group internal connections by pid
             internal_by_pid: dict[int, set] = collections.defaultdict(set)
 
@@ -597,7 +621,7 @@ class NetworkMonitor:
         if not _PSUTIL:
             return
         try:
-            conns = psutil.net_connections(kind="tcp")
+            conns = await asyncio.to_thread(psutil.net_connections, kind="tcp")
             close_wait_by_ip: dict[str, int] = collections.defaultdict(int)
 
             for c in conns:
@@ -706,7 +730,8 @@ class NetworkMonitor:
                 or first == 127
                 or ip.startswith("169.254.")
             )
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Private IP check failed for {ip}: {e}")
             return False
 
     async def _report(

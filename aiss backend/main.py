@@ -20,7 +20,8 @@ import time
 import uvicorn
 from datetime import datetime
 
-from api.routes import threats, scanner, network, auth_guard, files, ai_analyst
+from api.routes import threats, scanner, network, files, ai_analyst
+from api.routes import auth_guard as onboarding_routes  # onboarding + device pairing
 from api.routes import soc_chat as soc_chat_routes
 from api.routes import kill_chain as kill_chain_routes
 from api.routes import ai_firewall as ai_firewall_routes
@@ -28,15 +29,21 @@ from api.routes import learning as learning_routes
 from api.routes import keyword_learning as keyword_learning_routes
 from api.routes import dataset as dataset_routes
 from api.routes import system_health as system_health_routes
+from api.routes import system_config as system_config_routes
 from api.routes import network_discovery as network_discovery_routes
 from api.routes import intel as intel_routes
 from api.routes import agents as agents_routes
+from api.routes import orchestrator as orchestrator_routes
 from api.routes import topology as topology_routes
+from api.routes import live_system as live_system_routes
+from api.routes import auth as oauth_routes
+from api.routes import sso as sso_routes
+from api.routes import security_orchestrator as security_orchestrator_routes
 from auth.router import router as new_auth_router
 from core.websocket_manager import WebSocketManager
 from core.threat_engine import ThreatEngine
 from core.auth import verify_token
-from core.dependencies import init_services
+from core.dependencies import init_services, init_agent_services
 from core.database import init_db, close_db
 from utils.logger import setup_logger
 from modules.live_monitor import (
@@ -52,26 +59,30 @@ from core.startup_validator import run_startup_checks
 
 logger = setup_logger("main")
 
-# ── Rate Limiter ──────────────────────────────────────────────────────
+# â”€â”€ Rate Limiter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 
-# ── Core services ─────────────────────────────────────────────────────
+# â”€â”€ Core services â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 ws_manager    = WebSocketManager()
 threat_engine = ThreatEngine(ws_manager)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ── Security config & key validation (FIRST — before everything) ─
-    await security_config.validate()
+    # â”€â”€ Security config & key validation (FIRST â€” before everything) â”€
+    # ── Phase 1: Critical startup (must complete before accepting requests) ──
+    import time as _t
+    _boot = _t.monotonic()
 
-    # ── License validation ─────────────────────────────────────────────
-    await license_manager.validate()
+    # Run startup checks + DB init concurrently — they are independent.
+    # startup_checks already validates security_config + license internally.
+    await asyncio.gather(
+        run_startup_checks(),
+        init_db(),
+    )
+    logger.info(f"Phase 1 ready in {_t.monotonic() - _boot:.1f}s")
 
-    # ── Startup checks ────────────────────────────────────────────────
-    await run_startup_checks()
-
-    # ── Sentry init (if configured) ───────────────────────────────────
+    # â”€â”€ Sentry init (if configured) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     sentry_dsn = os.environ.get("SENTRY_DSN", "")
     if sentry_dsn:
         try:
@@ -81,178 +92,250 @@ async def lifespan(app: FastAPI):
                 traces_sample_rate=0.1,
                 environment=os.environ.get("ENVIRONMENT", "production"),
             )
-            logger.info(f"✅ Sentry initialized: {sentry_dsn[:30]}...")
+            logger.info(f"âœ… Sentry initialized: {sentry_dsn[:30]}...")
         except Exception as e:
             logger.warning(f"Sentry init failed: {e}")
 
-    # ── Library registry — detect & init all installed libraries ─────
+    # â”€â”€ Library registry â€” detect & init all installed libraries â”€â”€â”€â”€â”€
     # Runs as a background task so it never blocks startup.
-    # Heavy libs (model downloads) have individual timeouts.
+    # ── Library registry ─────────────────────────────────────────────────────
+    # Run ALL library inits in a thread-pool executor so heavy CPU-bound imports
+    # (spaCy, sentence-transformers, transformers, etc.) never block the async
+    # event loop. The HTTP server starts accepting connections immediately.
+    # Libraries become available in the background within ~60-120s.
     async def _init_libraries_bg():
         try:
-            await lib_registry.init_all(timeout_secs=120.0)
-            logger.info(f"📦 {lib_registry.summary()}")
-            # After registry ready, warm up singleton modules that depend on it
+            import concurrent.futures as _cf
+            _executor = _cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="lib_init")
+            loop = asyncio.get_event_loop()
+
+            def _run_sync_init():
+                """Run the registry init in its own event loop in the thread."""
+                _loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(_loop)
+                try:
+                    _loop.run_until_complete(lib_registry.init_all(timeout_secs=120.0, skip_heavy=True))
+                finally:
+                    _loop.close()
+
+            await loop.run_in_executor(_executor, _run_sync_init)
+            logger.info(f"Library registry ready: {lib_registry.summary()}")
+
+            # Warm up modules that depend on the registry
+            for _mod, _attr in [
+                ("modules.online_anomaly_detector", "online_detector"),
+                ("modules.ioc_extractor",           "ioc_extractor"),
+                ("modules.llm_router",              "llm_router"),
+                ("modules.report_exporter",         "report_exporter"),
+                ("utils.oauth_helper",              "oauth_helper"),
+            ]:
+                try:
+                    import importlib as _il
+                    _m = _il.import_module(_mod)
+                    _obj = getattr(_m, _attr, None)
+                    if _obj and hasattr(_obj, "_lazy_init"):
+                        _obj._lazy_init()
+                    elif _obj and hasattr(_obj, "_ensure_ready"):
+                        _obj._ensure_ready()
+                except Exception:
+                    pass
+
             try:
-                from modules.online_anomaly_detector import online_detector
-                online_detector._ensure_ready()
+                from utils.token_counter import is_available as _tc
+                if _tc():
+                    logger.info("tiktoken: token counting active")
             except Exception:
                 pass
-            try:
-                from modules.ioc_extractor import ioc_extractor
-                ioc_extractor._lazy_init()
-            except Exception:
-                pass
-            try:
-                from modules.llm_router import llm_router
-                llm_router._lazy_init()
-            except Exception:
-                pass
-            # Warm up report exporter (lazy matplotlib init)
-            try:
-                from modules.report_exporter import report_exporter
-                report_exporter._lazy_init()
-            except Exception:
-                pass
-            # Warm up oauth helper
-            try:
-                from utils.oauth_helper import oauth_helper
-                oauth_helper._lazy_init()
-            except Exception:
-                pass
-            # Verify token counter
-            try:
-                from utils.token_counter import is_available as tc_available
-                if tc_available():
-                    logger.info("✅ tiktoken: token counting active")
-            except Exception:
-                pass
-        except Exception as e:
-            logger.warning(f"Library registry init failed (non-fatal): {e}")
+        except Exception as _e:
+            logger.warning(f"Library registry init failed (non-fatal): {_e}")
 
     asyncio.create_task(_init_libraries_bg())
 
-    # ── Database + engine init ────────────────────────────────────────
-    await init_db()
-    await threat_engine.startup()
+    # Core dependency injection (instant)
     init_services(threat_engine, ws_manager)
+    from modules.security_orchestrator import security_orchestrator
+    security_orchestrator.ws_manager = ws_manager
 
-    # ── APScheduler setup ─────────────────────────────────────────────
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    scheduler = AsyncIOScheduler()
+    _bg = {}  # shared dict for background-init objects (scheduler, etc.)
 
-    # Stats snapshot every 10 minutes (replaces threat_engine._stats_snapshot_loop)
-    async def _stats_snapshot_job():
+    # ── Phase 2: Background heavy init — server accepts requests NOW ─────
+    async def _phase2_bg():
+        """Everything that doesn't need to block the HTTP server."""
         try:
-            snapshot = {
-                "timestamp": datetime.utcnow().isoformat(),
-                **threat_engine.get_stats(),
-            }
-            threat_engine._stats_history.append(snapshot)
-            if len(threat_engine._stats_history) > 288:
-                threat_engine._stats_history.pop(0)
+            await threat_engine.startup()
+            logger.info("Threat engine: persisted threats loaded")
         except Exception as e:
-            logger.debug(f"Stats snapshot job error: {e}")
+            logger.warning(f"Threat engine startup failed (non-fatal): {e}")
 
-    scheduler.add_job(_stats_snapshot_job, "interval", minutes=10, id="stats_snapshot")
-
-    # TTL auto-resolve LOW threats every 5 minutes
-    async def _ttl_auto_resolve_job():
+        # Agent Orchestrator init (heavy: ~15 module imports)
         try:
-            now = time.time()
-            for tid, threat in list(threat_engine.active_threats.items()):
-                if threat.status != "active" or threat.severity != "low":
-                    continue
-                try:
-                    from datetime import datetime as dt
-                    detected = dt.fromisoformat(threat.detected_at)
-                    age_secs = (dt.utcnow() - detected).total_seconds()
-                except Exception:
-                    continue
-                if age_secs > 3600:
-                    source_events = threat_engine._source_events.get(threat.source, [])
-                    recent = [e for e in source_events if now - e[1] < 600]
-                    if not recent:
-                        await threat_engine.resolve_threat(
-                            tid,
-                            f"TTL auto-resolve: no new activity from {threat.source} in 1h"
+            from agents.audit_logger import AuditLogger
+            from agents.security_filter import SecurityFilter
+            from agents.memory_store import AgentMemoryStore
+            from agents.ai_service import AIService
+            from agents.permission_engine import PermissionEngine
+            from agents.tool_registry import get_registry
+            from agents.tool_registrations import register_all_tools
+            from agents.approval_manager import ApprovalManager
+            from agents.orchestrator import AgentOrchestrator
+            from agents.scheduler import SchedulerEngine
+            from agents.report_generator import ReportGenerator
+
+            register_all_tools()
+            _audit_logger = AuditLogger()
+            _security_filter = SecurityFilter()
+            _memory_store = AgentMemoryStore()
+            _ai_service = AIService()
+            _permission_engine = PermissionEngine()
+            _registry = get_registry()
+            _approval_manager = ApprovalManager(ws_manager, _audit_logger)
+            _orchestrator = AgentOrchestrator(
+                ai_service=_ai_service,
+                tool_registry=_registry,
+                permission_engine=_permission_engine,
+                approval_manager=_approval_manager,
+                audit_logger=_audit_logger,
+                memory_store=_memory_store,
+                security_filter=_security_filter,
+                ws_manager=ws_manager,
+            )
+            _agent_scheduler = SchedulerEngine(_orchestrator)
+            from core.database import AsyncSessionLocal as _asl
+            _agent_scheduler.set_db_factory(_asl)
+            init_agent_services(_orchestrator, _agent_scheduler)
+            async with _asl() as _seed_db:
+                await _agent_scheduler.seed_defaults(_seed_db)
+            await _agent_scheduler.start()
+            logger.info("Agent Orchestrator initialized with %d tools", len(_registry.get_all()))
+        except Exception as _agent_err:
+            logger.warning("Agent Orchestrator init failed (non-fatal): %s", _agent_err)
+
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        scheduler = AsyncIOScheduler()
+
+        # Stats snapshot every 10 minutes (replaces threat_engine._stats_snapshot_loop)
+        async def _stats_snapshot_job():
+            try:
+                snapshot = {
+                    "timestamp": datetime.utcnow().isoformat(),
+                    **threat_engine.get_stats(),
+                }
+                threat_engine._stats_history.append(snapshot)
+                if len(threat_engine._stats_history) > 288:
+                    threat_engine._stats_history.pop(0)
+            except Exception as e:
+                logger.debug(f"Stats snapshot job error: {e}")
+
+        scheduler.add_job(_stats_snapshot_job, "interval", minutes=10, id="stats_snapshot")
+
+        # TTL auto-resolve LOW threats every 5 minutes
+        async def _ttl_auto_resolve_job():
+            try:
+                now = time.time()
+                for tid, threat in list(threat_engine.active_threats.items()):
+                    if threat.status != "active" or threat.severity != "low":
+                        continue
+                    try:
+                        from datetime import datetime as dt
+                        detected = dt.fromisoformat(threat.detected_at)
+                        age_secs = (dt.utcnow() - detected).total_seconds()
+                    except Exception:
+                        continue
+                    if age_secs > 3600:
+                        source_events = threat_engine._source_events.get(threat.source, [])
+                        recent = [e for e in source_events if now - e[1] < 600]
+                        if not recent:
+                            await threat_engine.resolve_threat(
+                                tid,
+                                f"TTL auto-resolve: no new activity from {threat.source} in 1h"
+                            )
+            except Exception as e:
+                logger.debug(f"TTL auto-resolve job error: {e}")
+
+        scheduler.add_job(_ttl_auto_resolve_job, "interval", minutes=5, id="ttl_auto_resolve")
+
+        # STIX/TAXII feed ingestion every 6 hours (if configured)
+        async def _taxii_ingest_job():
+            try:
+                from modules.threat_intel_feeds import ingest_from_taxii
+                count = await ingest_from_taxii()
+                if count > 0:
+                    logger.info(f"TAXII ingestion job: {count} indicators loaded")
+            except Exception as e:
+                logger.debug(f"TAXII ingestion job error: {e}")
+
+        scheduler.add_job(_taxii_ingest_job, "interval", hours=6, id="taxii_ingest")
+
+        # â”€â”€ Topology: refresh network interfaces â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        async def _topology_refresh_job():
+            try:
+                from modules.network_topology import topology_manager
+                await topology_manager.refresh_interfaces()
+            except Exception as e:
+                logger.debug(f"Topology refresh error: {e}")
+
+        scheduler.add_job(_topology_refresh_job, "interval", minutes=15, id="topology_refresh")
+        # Run once at startup (non-blocking)
+        asyncio.create_task(_topology_refresh_job())
+
+        # â”€â”€ Agent health check every 60s â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        async def _agent_health_job():
+            try:
+                import time
+                from modules.remote_agent import _agent_registry
+                from datetime import datetime
+                now = time.time()
+                for agent in list(_agent_registry.values()):
+                    try:
+                        last = datetime.fromisoformat(
+                            agent.last_seen.replace("Z", "+00:00")
                         )
-        except Exception as e:
-            logger.debug(f"TTL auto-resolve job error: {e}")
+                        if (now - last.timestamp()) > 60 and agent.status == "connected":
+                            agent.status = "idle"
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug(f"Agent health job error: {e}")
 
-    scheduler.add_job(_ttl_auto_resolve_job, "interval", minutes=5, id="ttl_auto_resolve")
+        scheduler.add_job(_agent_health_job, "interval", seconds=60, id="agent_health")
 
-    # STIX/TAXII feed ingestion every 6 hours (if configured)
-    async def _taxii_ingest_job():
+        scheduler.start()
+        logger.info("âœ… APScheduler: 5 background jobs scheduled")
+
+
+        from modules.dataset_loader import dataset_loader
+        from pathlib import Path
+        import asyncio as _asyncio
+        import time
+
+        async def _load_datasets_bg():
+            try:
+                datasets_exist = any(Path("datasets").glob("*.csv"))
+                patterns_exist = Path("data/dataset_patterns.json").exists()
+                if datasets_exist and not patterns_exist:
+                    logger.info("ðŸ“Š Computing dataset patterns...")
+                    loop = _asyncio.get_event_loop()
+                    await loop.run_in_executor(None, dataset_loader.load_all_datasets)
+                    logger.info("ðŸ“Š Dataset patterns ready")
+                elif patterns_exist:
+                    logger.info(f"ðŸ“Š Dataset patterns loaded ({dataset_loader.patterns.get('total_rows_processed', 0)} rows)")
+            except Exception as e:
+                logger.warning(f"ðŸ“Š Dataset load skipped: {e}")
+
+        _asyncio.create_task(_load_datasets_bg())
+
+        # Expose scheduler + agent scheduler for shutdown
         try:
-            from modules.threat_intel_feeds import ingest_from_taxii
-            count = await ingest_from_taxii()
-            if count > 0:
-                logger.info(f"TAXII ingestion job: {count} indicators loaded")
-        except Exception as e:
-            logger.debug(f"TAXII ingestion job error: {e}")
+            _bg["scheduler"] = scheduler
+            _bg["_agent_scheduler"] = _agent_scheduler
+        except NameError:
+            pass
 
-    scheduler.add_job(_taxii_ingest_job, "interval", hours=6, id="taxii_ingest")
-
-    # ── Topology: refresh network interfaces ─────────────────────────
-    async def _topology_refresh_job():
-        try:
-            from modules.network_topology import topology_manager
-            await topology_manager.refresh_interfaces()
-        except Exception as e:
-            logger.debug(f"Topology refresh error: {e}")
-
-    scheduler.add_job(_topology_refresh_job, "interval", minutes=15, id="topology_refresh")
-    # Run once at startup (non-blocking)
-    asyncio.create_task(_topology_refresh_job())
-
-    # ── Agent health check every 60s ─────────────────────────────────
-    async def _agent_health_job():
-        try:
-            import time
-            from modules.remote_agent import _agent_registry
-            from datetime import datetime
-            now = time.time()
-            for agent in list(_agent_registry.values()):
-                try:
-                    last = datetime.fromisoformat(
-                        agent.last_seen.replace("Z", "+00:00")
-                    )
-                    if (now - last.timestamp()) > 60 and agent.status == "connected":
-                        agent.status = "idle"
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.debug(f"Agent health job error: {e}")
-
-    scheduler.add_job(_agent_health_job, "interval", seconds=60, id="agent_health")
-
-    scheduler.start()
-    logger.info("✅ APScheduler: 5 background jobs scheduled")
-
-    # ── Dataset patterns load (non-blocking) ─────────────────────────
-    from modules.dataset_loader import dataset_loader
-    from pathlib import Path
-    import asyncio as _asyncio
-    import time
-
-    async def _load_datasets_bg():
-        try:
-            datasets_exist = any(Path("datasets").glob("*.csv"))
-            patterns_exist = Path("data/dataset_patterns.json").exists()
-            if datasets_exist and not patterns_exist:
-                logger.info("📊 Computing dataset patterns...")
-                loop = _asyncio.get_event_loop()
-                await loop.run_in_executor(None, dataset_loader.load_all_datasets)
-                logger.info("📊 Dataset patterns ready")
-            elif patterns_exist:
-                logger.info(f"📊 Dataset patterns loaded ({dataset_loader.patterns.get('total_rows_processed', 0)} rows)")
-        except Exception as e:
-            logger.warning(f"📊 Dataset load skipped: {e}")
-
-    _asyncio.create_task(_load_datasets_bg())
-
-    # ── Patch ThreatEngine to emit live feed lines ────────────────────
+    try:
+        _bg_task = asyncio.create_task(_phase2_bg())
+    except Exception as _e:
+        logger.warning(f"Phase 2 background init failed (non-fatal): {_e}")
+    # â”€â”€ Patch ThreatEngine to emit live feed lines â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _orig_register = threat_engine.register_threat
     _orig_resolve  = threat_engine.resolve_threat
 
@@ -271,16 +354,40 @@ async def lifespan(app: FastAPI):
     threat_engine.register_threat = _patched_register
     threat_engine.resolve_threat  = _patched_resolve
 
-    # ── Startup box ───────────────────────────────────────────────────
+    # â”€â”€ Startup box â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    # Auto-start monitoring on server startup (no WebSocket client required)
+    # This ensures threat detection runs from the moment the server starts,
+    # not only when a browser connects and sends {action: "start_monitoring"}.
+    # Blocking calls inside the monitors are now offloaded to thread pools and
+    # the monitor loop runs each monitor concurrently with a per-scan timeout.
+    async def _auto_start_monitoring():
+        await asyncio.sleep(3)   # let DB + modules initialize first
+        try:
+            await threat_engine.start_monitoring()
+            logger.info("Shield: Auto-monitoring STARTED on server startup")
+        except Exception as e:
+            logger.warning(f"Auto-monitoring start failed: {e}")
+
+    asyncio.create_task(_auto_start_monitoring())
+
     print_startup_box(threat_engine)
 
-    logger.info("🚀 AISS started — all systems active")
+    logger.info("ðŸš€ AISS started â€” all systems active")
     yield
 
-    # ── Shutdown ──────────────────────────────────────────────────────
-    scheduler.shutdown(wait=False)
+    # â”€â”€ Shutdown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    _sched = _bg.get("scheduler")
+    if _sched:
+        _sched.shutdown(wait=False)
+    _as = _bg.get("_agent_scheduler")
+    if _as:
+        try:
+            await _as.shutdown()
+        except Exception:
+            pass
     await close_db()
-    logger.info("🔌 AISS shutdown complete")
+    logger.info("AISS shutdown complete")
 
 
 app = FastAPI(
@@ -290,22 +397,22 @@ app = FastAPI(
     lifespan    = lifespan,
 )
 
-# ── Prometheus instrumentation ────────────────────────────────────────
+# â”€â”€ Prometheus instrumentation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 try:
     from prometheus_fastapi_instrumentator import Instrumentator
     Instrumentator().instrument(app).expose(app, endpoint="/metrics")
-    logger.info("✅ Prometheus: /metrics endpoint exposed")
+    logger.info("âœ… Prometheus: /metrics endpoint exposed")
 except Exception as e:
     logger.warning(f"Prometheus instrumentation failed: {e}")
 
-# ── Custom AISS Prometheus metrics ────────────────────────────────────
+# â”€â”€ Custom AISS Prometheus metrics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _metrics.init()
 
-# ── Rate limiter ──────────────────────────────────────────────────────
+# â”€â”€ Rate limiter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
 
-# ── Custom middleware ─────────────────────────────────────────────────
+# â”€â”€ Custom middleware â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Order matters: added last = runs first on the way in.
 from core.middleware import (
     InternalServiceMiddleware,
@@ -322,10 +429,10 @@ app.add_middleware(RequestSizeLimitMiddleware)
 app.add_middleware(InputSanitizationMiddleware)
 app.add_middleware(LicenseValidationMiddleware)
 
-# ── Exception handlers ────────────────────────────────────────────────
+# â”€â”€ Exception handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    logger.warning(f"Rate limit: {request.client.host} — {request.url.path}")
+    logger.warning(f"Rate limit: {request.client.host} â€” {request.url.path}")
     return JSONResponse(status_code=429, content={"error": "Too many requests. Slow down."})
 
 @app.exception_handler(StarletteHTTPException)
@@ -337,10 +444,10 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled {type(exc).__name__} on {request.method} {request.url.path}: {exc}")
     return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
-# ── Static files ──────────────────────────────────────────────────────
+# â”€â”€ Static files â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# ── CORS ──────────────────────────────────────────────────────────────
+# â”€â”€ CORS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _raw_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173,http://localhost:4173")
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
@@ -352,12 +459,11 @@ app.add_middleware(
     allow_headers     = ["Authorization", "Content-Type"],
 )
 
-# ── Routers ───────────────────────────────────────────────────────────
+# â”€â”€ Routers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.include_router(new_auth_router,              prefix="/api")
 app.include_router(threats.router,               prefix="/api/threats",    tags=["Threats"])
 app.include_router(scanner.router,               prefix="/api/scanner",    tags=["Scanner"])
 app.include_router(network.router,               prefix="/api/network",    tags=["Network"])
-app.include_router(auth_guard.router,            prefix="/api/auth-guard", tags=["Auth Guard"])
 app.include_router(files.router,                 prefix="/api/files",      tags=["File Inspector"])
 app.include_router(ai_analyst.router,            prefix="/api/ai",         tags=["AI Analyst"])
 app.include_router(soc_chat_routes.router,       prefix="/api",            tags=["SOC Assistant"])
@@ -367,18 +473,25 @@ app.include_router(learning_routes.router,         prefix="/api/learn",         
 app.include_router(keyword_learning_routes.router, prefix="/api/keyword-learn", tags=["Keyword Learning"])
 app.include_router(dataset_routes.router,          prefix="/api/dataset",        tags=["Datasets"])
 app.include_router(system_health_routes.router,    prefix="/api/system",         tags=["System Health"])
+app.include_router(system_config_routes.router,    prefix="/api",                tags=["System Config"])
 app.include_router(network_discovery_routes.router, prefix="/api/network-discovery", tags=["Network Discovery"])
 app.include_router(intel_routes.router,            prefix="/api/intel",          tags=["Threat Intelligence"])
-app.include_router(agents_routes.router,           prefix="/api/agents",         tags=["Remote Agents"])
+app.include_router(agents_routes.router,           prefix="/api/remote-agents",  tags=["Remote Agents"])
+app.include_router(orchestrator_routes.router,      prefix="/api",                tags=["Agent Orchestrator"])
+app.include_router(security_orchestrator_routes.router, prefix="/api",           tags=["Autonomous Security Orchestrator"])
 app.include_router(topology_routes.router,         prefix="/api/topology",        tags=["Network Topology"])
+app.include_router(live_system_routes.router,      prefix="/api/live",            tags=["Live System"])
+app.include_router(oauth_routes.router,            prefix="/api",                 tags=["OAuth"])
+app.include_router(sso_routes.router,              prefix="/api",                 tags=["SSO"])
+app.include_router(onboarding_routes.router,       prefix="/api",                 tags=["Onboarding & Devices"])
 
 
-# ── WebSocket ─────────────────────────────────────────────────────────
+# â”€â”€ WebSocket â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """
-    Secure WebSocket — JWT required in first message.
-    Flow: connect → send {action:"auth", token:"<jwt>"} → start using
+    Secure WebSocket â€” JWT required in first message.
+    Flow: connect â†’ send {action:"auth", token:"<jwt>"} â†’ start using
     Also triggers the setup wizard popup batch for the frontend on first connect.
     """
     await websocket.accept()
@@ -400,7 +513,7 @@ async def websocket_endpoint(websocket: WebSocket):
     if payload is None:
         await websocket.send_text('{"error": "Invalid or expired token"}')
         await websocket.close(code=1008)
-        logger.warning(f"WS rejected — bad token from {websocket.client.host}")
+        logger.warning(f"WS rejected â€” bad token from {websocket.client.host}")
         return
 
     user = payload.get("sub")
@@ -408,7 +521,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.send_text(json.dumps({"status": "authenticated", "user": user}))
     logger.info(f"WS connected: user={user}")
 
-    # ── Auto-send wizard popups to frontend on first connect ──────────
+    # â”€â”€ Auto-send wizard popups to frontend on first connect â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try:
         from modules.frontend_bridge import (
             register_frontend_socket, unregister_frontend_socket,
@@ -468,7 +581,7 @@ async def websocket_endpoint(websocket: WebSocket):
 async def websocket_monitor(websocket: WebSocket):
     """
     Public read-only WebSocket for the local dashboard.
-    No auth required — only broadcasts threat events, no control.
+    No auth required â€” only broadcasts threat events, no control.
     Only accessible from localhost.
     """
     client_host = websocket.client.host if websocket.client else ""
@@ -482,7 +595,7 @@ async def websocket_monitor(websocket: WebSocket):
 
     try:
         while True:
-            # Keep alive — just receive pings
+            # Keep alive â€” just receive pings
             await websocket.receive_text()
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
@@ -502,7 +615,7 @@ async def websocket_agent(websocket: WebSocket):
     await agent_manager.handle_connection(websocket)
 
 
-# ── Basic routes ──────────────────────────────────────────────────────
+# â”€â”€ Basic routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     return FileResponse("static/favicon.ico")
@@ -528,7 +641,7 @@ if __name__ == "__main__":
     # Check if port 8000 is already in use
     with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as _s:
         if _s.connect_ex(("127.0.0.1", 8000)) == 0:
-            print("\033[93m  ⚠  Port 8000 is already in use.\033[0m")
+            print("\033[93m  âš   Port 8000 is already in use.\033[0m")
             print("\033[93m  Killing existing process and restarting...\033[0m")
             import subprocess, sys
             subprocess.call(
@@ -542,9 +655,11 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
-        port=8000,
+        host=os.environ.get("AISS_BIND_HOST", "127.0.0.1"),
+        port=int(os.environ.get("AISS_BACKEND_PORT", "8000")),
         reload=False,
         workers=1,
         log_level="warning",
     )
+
+

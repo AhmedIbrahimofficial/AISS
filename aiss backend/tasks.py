@@ -92,8 +92,8 @@ def ai_analyze_task(self, threat_dict: dict, api_key: str = "") -> dict:
             metadata    = threat_dict.get("metadata", {}),
         )
 
-        key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
-        analyst = AIAnalyst(api_key=key)
+        # api_key param kept for backward compat but ignored — OpenRouter is used
+        analyst = AIAnalyst()
         result = _run_async(analyst.analyze_threat(threat))
         logger.info(f"AI analysis completed for threat {threat.id[:8]}")
         return {"status": "completed", "threat_id": threat.id, "analysis": result}

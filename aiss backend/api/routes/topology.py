@@ -2,6 +2,8 @@
 Exposes the full network topology map, segment management,
 interface discovery, and cross-network scanning.
 """
+import asyncio
+import time as _time
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
@@ -9,6 +11,10 @@ from core.dependencies import get_engine_authenticated
 from core.threat_engine import ThreatEngine
 
 router = APIRouter()
+
+# ── Response cache ────────────────────────────────────────────────────
+_topo_cache: dict = {"data": None, "ts": 0.0}
+_TOPO_TTL = 20.0   # seconds
 
 
 # ── Topology map ──────────────────────────────────────────────────────
@@ -18,10 +24,30 @@ async def get_topology_map():
     """
     Get the full network topology map.
     Returns nodes (devices), edges (connections), and segments (subnets).
-    Format: compatible with D3.js / Cytoscape / React-Flow for the frontend.
+    Cached for 20 seconds to avoid blocking on repeated interface scans.
     """
+    global _topo_cache
+    now = _time.monotonic()
+    if _topo_cache["data"] is not None and (now - _topo_cache["ts"]) < _TOPO_TTL:
+        return _topo_cache["data"]
+
     from modules.network_topology import topology_manager
-    return await topology_manager.get_topology_map()
+    try:
+        data = await asyncio.wait_for(topology_manager.get_topology_map(), timeout=15.0)
+        _topo_cache["data"] = data
+        _topo_cache["ts"]   = _time.monotonic()
+        return data
+    except asyncio.TimeoutError:
+        # Return cached data or fallback on timeout
+        if _topo_cache["data"] is not None:
+            return _topo_cache["data"]
+        return {
+            "nodes": [{"id": "aiss_server", "label": "AISS Server", "type": "server",
+                       "status": "online", "is_center": True}],
+            "edges": [], "segments": [], "interfaces": [],
+            "generated_at": __import__("datetime").datetime.utcnow().isoformat(),
+            "node_count": 1, "edge_count": 0,
+        }
 
 
 @router.post("/refresh")

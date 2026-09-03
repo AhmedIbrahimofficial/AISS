@@ -99,6 +99,7 @@ async def init_db():
 
     # Register auth models on Base.metadata before create_all
     import auth.models  # noqa: F401
+    import agents.models  # noqa: F401
     # Register module models so their tables are created
     try:
         import modules.network_discovery.models.discovery_models  # noqa: F401
@@ -178,8 +179,42 @@ async def init_db():
     db_label = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else DATABASE_URL
     logger.info(f"✅ Database ready [{db_type}]: {db_label}")
 
+    # ── SQLite: auto-add missing columns (handles schema evolution without Alembic) ──
+    if IS_SQLITE:
+        await _sqlite_add_missing_columns()
+
     # ── Seed default admin user (only if no users exist) ─────────────
     await _seed_default_admin()
+
+
+async def _sqlite_add_missing_columns():
+    """
+    SQLite does not support ALTER TABLE ADD COLUMN IF NOT EXISTS in older versions.
+    This function inspects each table and adds any missing columns defined in the ORM models.
+    Runs only on SQLite. Safe to run multiple times (idempotent).
+    """
+    import inspect
+    from sqlalchemy import inspect as sa_inspect, text
+
+    # Columns we know need adding for auth_users (oauth migration)
+    _AUTH_COLUMNS = [
+        ("auth_users", "oauth_provider",       "TEXT"),
+        ("auth_users", "oauth_subject",        "TEXT"),
+        ("auth_users", "avatar_url",           "TEXT"),
+        ("auth_users", "must_change_password", "BOOLEAN DEFAULT 0"),
+    ]
+
+    try:
+        async with engine.begin() as conn:
+            for table, column, col_type in _AUTH_COLUMNS:
+                # Check if column exists
+                result = await conn.execute(text(f"PRAGMA table_info({table})"))
+                existing_cols = [row[1] for row in result.fetchall()]
+                if column not in existing_cols:
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
+                    logger.info(f"✅ SQLite migration: added column {table}.{column}")
+    except Exception as e:
+        logger.warning(f"SQLite column migration skipped: {e}")
 
 
 async def _seed_default_admin():
@@ -195,12 +230,13 @@ async def _seed_default_admin():
                 return  # users already exist
 
             admin = AuthUser(
-                username        = "admin",
-                email           = "admin@aiss-platform.com",
-                hashed_password = hash_password("Admin123!"),
-                is_verified     = True,
-                is_active       = True,
-                role            = "admin",
+                username             = "admin",
+                email                = "admin@aiss-platform.com",
+                hashed_password      = hash_password("Admin123!"),
+                is_verified          = True,
+                is_active            = True,
+                role                 = "admin",
+                must_change_password = True,
             )
             db.add(admin)
             await db.commit()

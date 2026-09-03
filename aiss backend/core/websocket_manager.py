@@ -1,5 +1,10 @@
 """AISS - WebSocket Manager
-Handles real-time broadcasting of threats to all connected clients
+Handles real-time broadcasting of threats to all connected clients.
+
+BUG FIX: Added user_id parameter to broadcast() so the AgentOrchestrator's
+_broadcast(user_id=..., data=...) calls work correctly. The user_id is
+accepted but currently broadcasts to all connections (kept for future
+per-user channel support without breaking callers).
 """
 
 import json
@@ -23,7 +28,16 @@ class WebSocketManager:
             self.active_connections.remove(websocket)
         logger.info(f"🔌 WebSocket disconnected. Total: {len(self.active_connections)}")
 
-    async def broadcast(self, data: dict):
+    async def broadcast(self, data: dict, user_id: str | None = None) -> None:
+        """
+        Broadcast data to all connected clients.
+
+        Args:
+            data:    The JSON-serialisable payload to send.
+            user_id: Optional — reserved for future per-user routing.
+                     Currently broadcasts to all connections so that agent
+                     events (which supply user_id) are not silently dropped.
+        """
         message = json.dumps(data)
         dead = []
         for connection in self.active_connections:

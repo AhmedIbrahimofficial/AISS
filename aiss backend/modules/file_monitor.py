@@ -36,11 +36,28 @@ logger = setup_logger("file_monitor")
 
 IS_WINDOWS = sys.platform == "win32"
 
-# ── Known malicious file hashes (SHA256 / MD5) ────────────────────────
-MALICIOUS_HASHES = {
-    "44d88612fea8a8f36de82e1278abb02f",
+try:
+    import psutil as _psutil_mod
+    _PSUTIL = True
+except ImportError:
+    _psutil_mod = None
+    _PSUTIL = False
+
+# ── Known malicious file hashes (SHA256) ─────────────────────────────
+# Seeded with EICAR test hash. The set grows at runtime — every file
+# confirmed malicious by YARA or response engine is added here so
+# subsequent encounters across ANY directory are caught instantly.
+MALICIOUS_HASHES: set[str] = {
+    # EICAR test file — standard AV test signature
     "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+    # EICAR MD5 (kept as secondary check)
+    "44d88612fea8a8f36de82e1278abb02f",
 }
+
+def _register_malicious_hash(sha256: str) -> None:
+    """Add a confirmed-malicious SHA256 to the runtime hash set."""
+    if sha256 and len(sha256) == 64:
+        MALICIOUS_HASHES.add(sha256.lower())
 
 SUSPICIOUS_EXTENSIONS = {
     ".exe", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".hta",
@@ -128,7 +145,8 @@ def file_entropy(path: str, max_bytes: int = 65536) -> float:
         freq  = collections.Counter(data)
         total = len(data)
         return -sum((c / total) * math.log2(c / total) for c in freq.values())
-    except Exception:
+    except Exception as e:
+        logger.debug(f"file_entropy failed: {e}")
         return 0.0
 
 
@@ -139,12 +157,95 @@ def _get_temp_dir() -> str:
     return "/tmp"
 
 
+def _get_all_drives() -> list[str]:
+    """
+    Return all accessible filesystem roots on the current machine.
+    Windows: every drive letter that responds (C:\\, D:\\, E:\\, ...).
+    Linux/Mac: all real mounted filesystems excluding pseudo-filesystems.
+    """
+    roots: list[str] = []
+    if IS_WINDOWS:
+        import string
+        for letter in string.ascii_uppercase:
+            drive = f"{letter}:\\"
+            if os.path.exists(drive):
+                roots.append(drive)
+    else:
+        skip_types = {
+            "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup",
+            "cgroup2", "pstore", "debugfs", "hugetlbfs", "mqueue",
+            "fusectl", "securityfs", "configfs", "efivarfs", "bpf",
+            "tracefs", "ramfs", "overlay", "autofs", "nsfs",
+        }
+        try:
+            with open("/proc/mounts", "r") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 3 and parts[2] not in skip_types:
+                        mount = parts[1]
+                        if mount and os.path.isdir(mount):
+                            roots.append(mount)
+        except Exception:
+            roots.append("/")
+    return roots
+
+
+def _get_open_file_dirs() -> set[str]:
+    """
+    Collect unique parent directories of every file open by any running process.
+    Ensures directories that live processes are actively reading/writing
+    are scanned regardless of their location on the filesystem.
+    """
+    dirs: set[str] = set()
+    if not _PSUTIL or _psutil_mod is None:
+        return dirs
+    try:
+        for proc in _psutil_mod.process_iter():
+            try:
+                for f in proc.open_files():
+                    parent = os.path.dirname(f.path)
+                    if parent and os.path.isdir(parent):
+                        dirs.add(parent)
+                try:
+                    cwd = proc.cwd()
+                    if cwd and os.path.isdir(cwd):
+                        dirs.add(cwd)
+                except (_psutil_mod.NoSuchProcess, _psutil_mod.AccessDenied):
+                    pass
+            except (_psutil_mod.NoSuchProcess, _psutil_mod.AccessDenied, Exception):
+                pass
+    except Exception:
+        pass
+    return dirs
+
+
 def _get_watch_dirs() -> list[str]:
     """
-    Return ALL critical system directories to watch.
-    Covers: temp, downloads, startup folders, system dirs,
-    user profile, desktop, documents, program files.
+    Build the full directory list dynamically every scan cycle.
+
+    Three-layer coverage:
+      1. High-value static anchors (temp, user dirs, startup, system paths) —
+         known-hot locations, always included.
+      2. All mounted drives / filesystem roots — infected folders on D:\\,
+         /media/usb, network shares, etc. are never missed.
+      3. Open-file directories from live processes — any directory a running
+         process is actively touching is pulled in immediately.
+
+    No extension or directory filtering — every accessible directory feeds
+    into the scanner. The inspector decides per-file whether to act.
     """
+    dirs: list[str] = []
+    seen: set[str] = set()
+
+    def _add(d: str) -> None:
+        if not d:
+            return
+        d = os.path.normpath(d)
+        if d not in seen and os.path.isdir(d):
+            seen.add(d)
+            dirs.append(d)
+
+    # ── Layer 1: high-value static anchors ───────────────────────────
     if IS_WINDOWS:
         user     = os.path.expanduser("~")
         temp     = os.environ.get("TEMP", "C:\\Windows\\Temp")
@@ -153,54 +254,67 @@ def _get_watch_dirs() -> list[str]:
         windir   = os.environ.get("WINDIR", "C:\\Windows")
         progdata = os.environ.get("PROGRAMDATA", "C:\\ProgramData")
 
-        dirs = [
-            # ── Temp / staging areas (highest risk) ────────────────
-            temp,
-            "C:\\Windows\\Temp",
-            os.path.join(localapp, "Temp"),
-
-            # ── User locations ──────────────────────────────────────
-            os.path.join(user, "Downloads"),
-            os.path.join(user, "Desktop"),
+        for d in [
+            temp, "C:\\Windows\\Temp",
+            os.path.join(localapp, "Temp") if localapp else "",
+            os.path.join(user, "Downloads"), os.path.join(user, "Desktop"),
             os.path.join(user, "Documents"),
             os.path.join(user, "AppData", "Roaming"),
             os.path.join(user, "AppData", "Local"),
-            os.path.join(user, "AppData", "Local", "Temp"),
-
-            # ── Windows startup locations (malware persistence) ─────
             os.path.join(appdata, "Microsoft", "Windows", "Start Menu",
-                         "Programs", "Startup"),
+                         "Programs", "Startup") if appdata else "",
             os.path.join(progdata, "Microsoft", "Windows", "Start Menu",
-                         "Programs", "Startup"),
+                         "Programs", "Startup") if progdata else "",
+            os.path.join(windir, "System32"), os.path.join(windir, "SysWOW64"),
+            os.path.join(windir, "Tasks"), os.path.join(windir, "System32", "drivers"),
+            "C:\\Program Files", "C:\\Program Files (x86)",
+            progdata, "C:\\Users\\Public", "C:\\Users\\Public\\Downloads",
+        ]:
+            _add(d)
 
-            # ── System directories ──────────────────────────────────
-            os.path.join(windir, "System32"),
-            os.path.join(windir, "SysWOW64"),
-            os.path.join(windir, "Tasks"),                  # scheduled tasks
-            os.path.join(windir, "System32", "drivers"),    # kernel drivers
-
-            # ── Program installs ────────────────────────────────────
-            "C:\\Program Files",
-            "C:\\Program Files (x86)",
-            progdata,
-
-            # ── Network / shared ────────────────────────────────────
-            "C:\\Users\\Public",
-            "C:\\Users\\Public\\Downloads",
-        ]
-        return [d for d in dirs if d and os.path.exists(d)]
+        # Every user's home subdirectories
+        users_root = "C:\\Users"
+        if os.path.isdir(users_root):
+            try:
+                for entry in os.scandir(users_root):
+                    if entry.is_dir() and entry.name not in ("Public", "Default", "All Users"):
+                        for sub in ["Downloads", "Desktop", "Documents",
+                                    "AppData\\Roaming", "AppData\\Local"]:
+                            _add(os.path.join(entry.path, sub))
+            except (PermissionError, OSError):
+                pass
     else:
-        # Linux: cover all critical locations
         home = os.path.expanduser("~")
-        return [d for d in [
+        for d in [
             "/tmp", "/var/tmp", "/dev/shm",
-            os.path.join(home, "Downloads"),
-            os.path.join(home, "Desktop"),
-            "/etc/cron.d", "/etc/cron.hourly", "/etc/init.d",
-            "/var/spool/cron",
-            "/usr/local/bin", "/usr/bin",
-            "/etc",
-        ] if os.path.exists(d)]
+            os.path.join(home, "Downloads"), os.path.join(home, "Desktop"),
+            "/etc", "/etc/cron.d", "/etc/cron.hourly", "/etc/init.d",
+            "/var/spool/cron", "/usr/local/bin", "/usr/bin",
+        ]:
+            _add(d)
+        # Every user's home
+        try:
+            for entry in os.scandir("/home"):
+                if entry.is_dir():
+                    for sub in ["Downloads", "Desktop", "Documents", ".local/share"]:
+                        _add(os.path.join(entry.path, sub))
+        except (PermissionError, OSError):
+            pass
+
+    # ── Layer 2: all mounted drives/roots ────────────────────────────
+    for root in _get_all_drives():
+        _add(root)
+
+    # ── Layer 3: directories actively touched by live processes ───────
+    for d in _get_open_file_dirs():
+        _add(d)
+
+    # ── Extra dirs from environment variable ─────────────────────────
+    extra = os.environ.get("AISS_EXTRA_WATCH_DIRS", "")
+    for d in (extra.split(";") if extra else []):
+        _add(d.strip())
+
+    return dirs
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -252,7 +366,7 @@ class FileMonitor:
 
             for watch_dir in _get_watch_dirs():
                 try:
-                    observer.schedule(handler, watch_dir, recursive=False)
+                    observer.schedule(handler, watch_dir, recursive=True)
                     watched += 1
                 except Exception as e:
                     logger.debug(f"Watchdog could not watch {watch_dir}: {e}")
@@ -275,8 +389,8 @@ class FileMonitor:
             try:
                 self._observer.stop()
                 self._observer.join(timeout=2)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Watchdog shutdown error: {e}")
 
     async def scan(self) -> None:
         """
@@ -317,7 +431,8 @@ class FileMonitor:
                         await self._inspect_file(filepath, stat)
                 except (PermissionError, FileNotFoundError, OSError):
                     pass
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Watchdog event processing error: {e}")
                 break
 
         # Check velocity for affected directories
@@ -353,6 +468,7 @@ class FileMonitor:
         - System dirs (System32 etc): scan only files modified in last 60s
         """
         now = time.time()
+        file_idx = 0
         for watch_dir in _get_watch_dirs():
             try:
                 # Determine if this is a system dir (scan recent only)
@@ -361,7 +477,10 @@ class FileMonitor:
                     s in dir_lower for s in self._RECENT_ONLY_DIRS
                 )
 
-                for entry in os.scandir(watch_dir):
+                for entry in await asyncio.to_thread(lambda: list(os.scandir(watch_dir))):
+                    file_idx += 1
+                    if file_idx % 25 == 0:
+                        await asyncio.sleep(0)
                     if not entry.is_file():
                         continue
                     try:
@@ -405,54 +524,68 @@ class FileMonitor:
                 pass
 
     async def _inspect_file(self, filepath: str, stat: os.stat_result) -> None:
-        """Inspect a single file for all threat indicators."""
+        """
+        Inspect a single file for ALL threat indicators regardless of extension or type.
+
+        Checks applied to every file:
+          1. Hash check against known-malicious SHA256 set (grows at runtime)
+          2. Real YARA rules (all .yar files in rules/) — no extension filter
+          3. Ransomware extension detection
+          4. Script content pattern scan (for text-readable files)
+          5. Entropy analysis — high entropy = packed/encrypted malware
+          6. Suspicious executable in temp dir
+
+        No extension whitelist. Any file that can be opened is inspected.
+        """
         try:
             ext = Path(filepath).suffix.lower()
 
-            # Hash check
-            file_hash = await self._hash_file(filepath)
-            if file_hash in MALICIOUS_HASHES:
-                await self._report(
-                    ThreatType.VIRUS, ThreatSeverity.CRITICAL,
-                    f"Known malware hash detected: {filepath}",
-                    filepath,
-                    {"hash": file_hash, "path": filepath}
-                )
-                await self.engine.auto_respond(
-                    Threat(type=ThreatType.VIRUS,
-                           description=f"Hash match: {filepath}",
-                           severity=ThreatSeverity.CRITICAL,
-                           source=filepath, module="FileMonitor")
-                )
-                return
+            # ── 1. Hash check against known-malicious SHA256 ──────────
+            file_hash = await asyncio.to_thread(self._hash_file_sync, filepath)
+            if file_hash and file_hash in MALICIOUS_HASHES:
+                key = f"hash:{filepath}"
+                if key not in _reported_files:
+                    await self._report(
+                        ThreatType.VIRUS, ThreatSeverity.CRITICAL,
+                        f"Known malware hash detected: {filepath}",
+                        filepath,
+                        {"hash": file_hash, "path": filepath, "detection": "hash_match"}
+                    )
+                    _reported_files.add(key)
+                return  # confirmed match — no further checks needed
 
-            # ── Real YARA file scan ────────────────────────────────────
+            # ── 2. Real YARA scan — runs on EVERY file ────────────────
             try:
                 from modules.yara_scanner import scan_file as yara_scan_file
-                yara_hits = yara_scan_file(filepath)
+                yara_hits = await asyncio.to_thread(yara_scan_file, filepath)
                 if yara_hits:
                     hit = yara_hits[0]
                     sev_map = {
                         "CRITICAL": ThreatSeverity.CRITICAL,
                         "HIGH":     ThreatSeverity.HIGH,
                         "MEDIUM":   ThreatSeverity.MEDIUM,
+                        "LOW":      ThreatSeverity.LOW,
                     }
                     sev = sev_map.get(hit.get("severity", "HIGH"), ThreatSeverity.HIGH)
                     key = f"yara:{filepath}"
                     if key not in _reported_files:
+                        # Register the hash so future copies across ANY path are caught
+                        if file_hash:
+                            _register_malicious_hash(file_hash)
                         await self._report(
                             ThreatType.VIRUS, sev,
                             f"YARA rule '{hit['rule']}' matched in file: {filepath}",
                             filepath,
-                            {"yara_rule": hit["rule"], "description": hit["description"],
-                             "path": filepath}
+                            {"yara_rule": hit["rule"], "description": hit.get("description", ""),
+                             "path": filepath, "hash": file_hash,
+                             "strings": hit.get("strings", [])}
                         )
                         _reported_files.add(key)
-                    return
-            except Exception:
-                pass
+                    return  # YARA hit is definitive — stop here
+            except Exception as e:
+                logger.debug(f"YARA file scan failed for {filepath}: {e}")
 
-            # Extension mass-change tracking
+            # ── 3. Ransomware extension check ─────────────────────────
             if ext in RANSOMWARE_EXTENSIONS:
                 now = time.time()
                 parent = str(Path(filepath).parent)
@@ -467,18 +600,28 @@ class FileMonitor:
                         ThreatType.RANSOMWARE, ThreatSeverity.CRITICAL,
                         f"Ransomware: {count} files changed to encrypted extension in 60s in {parent}",
                         parent,
-                        {"directory": parent, "extension_count": count,
-                         "sample_extension": ext}
+                        {"directory": parent, "extension_count": count, "sample_extension": ext}
                     )
                     _reported_files.add(ext_key)
 
-            # Script content scan
-            if ext in {".sh", ".py", ".js", ".ps1", ".vbs", ".bat", ".cmd", ".hta", ".wsf"}:
+            # ── 4. Script/text content scan ───────────────────────────
+            # Run on any file that can be decoded as text (not just known
+            # script extensions) — malware hides in .txt, .log, .conf, etc.
+            TEXT_EXTS = {
+                ".sh", ".py", ".js", ".ts", ".ps1", ".psm1", ".psd1",
+                ".vbs", ".vbe", ".bat", ".cmd", ".hta", ".wsf", ".wsh",
+                ".html", ".htm", ".php", ".asp", ".aspx", ".jsp",
+                ".rb", ".pl", ".lua", ".tcl", ".go", ".rs",
+                ".txt", ".log", ".conf", ".cfg", ".ini", ".xml", ".json",
+                ".reg", ".inf", "",  # no extension = inspect too
+            }
+            if ext in TEXT_EXTS or stat.st_size < 512 * 1024:
                 await self._scan_script_content(filepath)
 
-            # Entropy check for executables and suspicious extensions
-            if ext in SUSPICIOUS_EXTENSIONS:
-                entropy = file_entropy(filepath)
+            # ── 5. Entropy analysis — all files, any extension ────────
+            # Skip very small files (<64 bytes) — too little data for entropy
+            if stat.st_size >= 64:
+                entropy = await asyncio.to_thread(file_entropy, filepath)
                 if entropy > 7.2:
                     key = f"entropy:{filepath}"
                     if key not in _reported_files:
@@ -487,12 +630,14 @@ class FileMonitor:
                             f"High-entropy file (packed/encrypted, entropy={entropy:.2f}): {filepath}",
                             filepath,
                             {"path": filepath, "entropy": round(entropy, 4),
-                             "extension": ext, "size": stat.st_size}
+                             "extension": ext, "size": stat.st_size,
+                             "detection": "entropy_analysis"}
                         )
                         _reported_files.add(key)
                         return
 
-                # Suspicious executable in temp dir
+            # ── 6. Executable in temp directory ──────────────────────
+            if ext in SUSPICIOUS_EXTENSIONS:
                 temp_dir = _get_temp_dir().lower()
                 if temp_dir in filepath.lower():
                     key = f"temp_exe:{filepath}"
@@ -501,18 +646,29 @@ class FileMonitor:
                             ThreatType.SUSPICIOUS_FILE, ThreatSeverity.HIGH,
                             f"Suspicious executable in temp directory: {filepath}",
                             filepath,
-                            {"extension": ext, "path": filepath, "size": stat.st_size}
+                            {"extension": ext, "path": filepath, "size": stat.st_size,
+                             "detection": "temp_dir_executable"}
                         )
                         _reported_files.add(key)
 
         except (PermissionError, FileNotFoundError, OSError):
             pass
 
+    def _read_script_content(self, filepath: str) -> str:
+        """Read script content synchronously (call via asyncio.to_thread)."""
+        try:
+            with open(filepath, "r", errors="ignore") as f:
+                return f.read(50000)
+        except Exception as e:
+            logger.debug(f"Could not read script {filepath}: {e}")
+            return ""
+
     async def _scan_script_content(self, filepath: str) -> None:
         """Scan script file content for malicious patterns and phishing URLs."""
         try:
-            with open(filepath, "r", errors="ignore") as f:
-                content = f.read(50000)
+            content = await asyncio.to_thread(self._read_script_content, filepath)
+            if not content:
+                return
 
             # ── Malicious pattern check ───────────────────────────────
             for pattern in MALICIOUS_PATTERNS:
@@ -548,8 +704,8 @@ class FileMonitor:
                         _reported_files.add(key)
                     break
 
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Script content scan failed for {filepath}: {e}")
 
     # ── 2. Ransomware activity (encrypted file count) ─────────────────
 
@@ -558,7 +714,7 @@ class FileMonitor:
         home = os.path.expanduser("~")
         encrypted_count = 0
         try:
-            for root, _, files in os.walk(home):
+            for root, _, files in await asyncio.to_thread(lambda: list(os.walk(home))):
                 for fname in files:
                     if Path(fname).suffix.lower() in RANSOMWARE_EXTENSIONS:
                         encrypted_count += 1
@@ -586,7 +742,9 @@ class FileMonitor:
         global _shadow_delete_seen
         try:
             import psutil
-            for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
+            for proc in await asyncio.to_thread(
+                lambda: list(psutil.process_iter(attrs=["pid", "name", "cmdline"]))
+            ):
                 try:
                     cmdline = " ".join(proc.info.get("cmdline", []) or []).lower()
                     if any(pat in cmdline for pat in [
@@ -623,10 +781,10 @@ class FileMonitor:
             if filepath.startswith(".ssh"):
                 filepath = os.path.join(os.path.expanduser("~"), filepath)
 
-            if not os.path.exists(filepath):
+            if not await asyncio.to_thread(os.path.exists, filepath):
                 continue
             try:
-                stat  = os.stat(filepath)
+                stat  = await asyncio.to_thread(os.stat, filepath)
                 atime = stat.st_atime
                 key   = f"sensitive:{filepath}"
 
@@ -648,16 +806,21 @@ class FileMonitor:
 
     # ── Helpers ───────────────────────────────────────────────────────
 
-    async def _hash_file(self, filepath: str) -> str:
-        """Calculate SHA256 hash of a file."""
+    def _hash_file_sync(self, filepath: str) -> str:
+        """Calculate SHA256 hash of a file (synchronous — call via asyncio.to_thread)."""
         sha256 = hashlib.sha256()
         try:
             with open(filepath, "rb") as f:
                 while chunk := f.read(8192):
                     sha256.update(chunk)
             return sha256.hexdigest()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Hash failed for {filepath}: {e}")
             return ""
+
+    async def _hash_file(self, filepath: str) -> str:
+        """Calculate SHA256 hash of a file."""
+        return await asyncio.to_thread(self._hash_file_sync, filepath)
 
     async def _report(
         self,

@@ -1014,11 +1014,15 @@ class LibRegistry:
     """
     Central registry for all optional library integrations.
 
+    Supports two modes:
+      - Eager (init_all): Run all initialisers at startup (legacy behavior)
+      - Lazy (default): Only initialise a library when first accessed
+
     Usage:
         registry = LibRegistry()
-        await registry.init_all()          # run once at startup
+        await registry.init_all()          # optional — eager mode
 
-        registry.is_enabled("chromadb")    # bool
+        registry.is_enabled("chromadb")    # triggers lazy init if needed
         registry.get("chromadb")           # client or None
         registry.status()                  # list[dict] — API-safe
         registry.summary()                 # one-line startup log
@@ -1026,13 +1030,25 @@ class LibRegistry:
 
     def __init__(self) -> None:
         self._results: dict[str, LibStatus] = {}
+        self._init_map: dict[str, Any] = {n: fn for n, fn, _ in _INITIALISERS}
+        self._lazy_mode: bool = True  # default to lazy
+        self._init_lock = asyncio.Lock()
+        self._init_started = False
 
-    async def init_all(self, *, timeout_secs: float = 120.0) -> None:
+    async def init_all(self, *, timeout_secs: float = 120.0, skip_heavy: bool = False) -> None:
         """
         Run all initialisers.
         Light initialisers run concurrently; heavy ones (model downloads) run
         sequentially to avoid OOM during parallel downloads.
+
+        When ``skip_heavy=True`` (used during server startup) only the fast,
+        lightweight initialisers are run. Heavy model-downloading libraries
+        (EasyOCR, transformers, spaCy, sentence-transformers, etc.) are left in
+        lazy mode and initialised on first access so they cannot block the
+        asyncio event loop and freeze HTTP health checks.
         """
+        self._lazy_mode = False
+        self._init_started = True
         t0 = time.time()
         logger.info("🔍 LibRegistry: starting library integration scan...")
 
@@ -1053,14 +1069,22 @@ class LibRegistry:
             self._results[st.name] = st
 
         # ── Run heavy initialisers sequentially ───────────────────────
-        for name, fn in heavy:
-            try:
-                st = await asyncio.wait_for(fn(), timeout=timeout_secs)
-            except asyncio.TimeoutError:
-                st = LibStatus(name, False, notes=f"timeout (>{timeout_secs}s)")
-            except Exception as e:
-                st = LibStatus(name, False, notes=str(e))
-            self._results[st.name] = st
+        if skip_heavy:
+            for name, _ in heavy:
+                self._results[name] = LibStatus(name, False, notes="deferred (lazy init)")
+            logger.info("⏳ LibRegistry: heavy initialisers deferred; will load on first use")
+        else:
+            for name, fn in heavy:
+                try:
+                    st = await asyncio.wait_for(fn(), timeout=timeout_secs)
+                except asyncio.TimeoutError:
+                    st = LibStatus(name, False, notes=f"timeout (>{timeout_secs}s)")
+                except Exception as e:
+                    st = LibStatus(name, False, notes=str(e))
+                self._results[st.name] = st
+                # Yield CPU so the main asyncio event loop can handle HTTP requests
+                # while heavy model downloads/imports run in the background thread.
+                await asyncio.sleep(0.5)
 
         elapsed = time.time() - t0
         enabled = sum(1 for s in self._results.values() if s.enabled)
@@ -1070,12 +1094,50 @@ class LibRegistry:
             f"({elapsed:.1f}s) — use GET /api/system/libraries for details"
         )
 
+    async def _lazy_init_one(self, name: str) -> LibStatus:
+        """Lazily initialise a single library on first access."""
+        async with self._init_lock:
+            if name in self._results:
+                return self._results[name]
+            fn = self._init_map.get(name)
+            if fn is None:
+                return LibStatus(name, False, notes="unknown library")
+            try:
+                st = await asyncio.wait_for(fn(), timeout=30.0)
+            except asyncio.TimeoutError:
+                st = LibStatus(name, False, notes="timeout (>30s)")
+            except Exception as e:
+                st = LibStatus(name, False, notes=str(e))
+            self._results[name] = st
+            return st
+
     def is_enabled(self, name: str) -> bool:
-        return self._results.get(name, LibStatus(name, False)).enabled
+        # In lazy mode, check if already initialised; if not, return False
+        # (caller should use get_async for lazy init)
+        st = self._results.get(name)
+        if st is not None:
+            return st.enabled
+        # Not yet initialised — return False (use is_enabled_async for lazy)
+        return False
+
+    async def is_enabled_async(self, name: str) -> bool:
+        """Check if a library is enabled, initialising it lazily if needed."""
+        if name in self._results:
+            return self._results[name].enabled
+        st = await self._lazy_init_one(name)
+        return st.enabled
 
     def get(self, name: str) -> Optional[Any]:
         st = self._results.get(name)
         return st.client if st and st.enabled else None
+
+    async def get_async(self, name: str) -> Optional[Any]:
+        """Get library client, initialising lazily if needed."""
+        if name in self._results:
+            st = self._results[name]
+            return st.client if st.enabled else None
+        st = await self._lazy_init_one(name)
+        return st.client if st.enabled else None
 
     def status(self) -> list[dict]:
         return [s.to_dict() for s in sorted(self._results.values(), key=lambda x: x.name)]

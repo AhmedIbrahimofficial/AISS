@@ -7,16 +7,19 @@ Rate limiting applied on sensitive endpoints via slowapi.
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import service
 from auth.dependencies import get_current_user, get_current_verified_user
+from auth.models import AuthUser, AuthSession
 from auth.schemas import (
     RegisterRequest, RegisterResponse,
     LoginRequest, TokenResponse,
     RefreshRequest, LogoutRequest,
     VerifyEmailResponse, SendOtpRequest, VerifyOtpRequest,
     ForgotPasswordRequest, ResetPasswordRequest,
+    ChangePasswordRequest,
     UserProfile, MessageResponse,
 )
 from core.database import get_db
@@ -166,14 +169,15 @@ async def verify_otp(
 )
 async def me(current_user = Depends(get_current_user)):
     return UserProfile(
-        id                = current_user.id,
-        username          = current_user.username,
-        email             = current_user.email,
-        role              = current_user.role,
-        is_verified       = current_user.is_verified,
-        is_phone_verified = current_user.is_phone_verified,
-        created_at        = current_user.created_at,
-        last_login_at     = current_user.last_login_at,
+        id                   = current_user.id,
+        username             = current_user.username,
+        email                = current_user.email,
+        role                 = current_user.role,
+        is_verified          = current_user.is_verified,
+        is_phone_verified    = current_user.is_phone_verified,
+        must_change_password = current_user.must_change_password,
+        created_at           = current_user.created_at,
+        last_login_at        = current_user.last_login_at,
     )
 
 
@@ -212,6 +216,52 @@ async def reset_password(
     )
 
 
+# ── GET /auth/users ──────────────────────────────────────────────────
+@router.get(
+    "/users",
+    summary="List all users (admin endpoint)",
+)
+async def list_users(
+    current_user = Depends(get_current_user),
+    db:           AsyncSession = Depends(get_db),
+):
+    """Return all registered users with role, status and session info."""
+    result = await db.execute(
+        select(AuthUser).order_by(AuthUser.created_at.desc())
+    )
+    users = result.scalars().all()
+
+    # Gather active session counts per user
+    session_counts_q = await db.execute(
+        select(AuthSession.user_id, func.count(AuthSession.id))
+        .where(AuthSession.is_revoked == False)
+        .group_by(AuthSession.user_id)
+    )
+    session_counts = dict(session_counts_q.all())
+
+    user_list = []
+    for u in users:
+        user_list.append({
+            "id":              u.id,
+            "username":        u.username,
+            "email":           u.email,
+            "role":            u.role,
+            "is_active":       u.is_active,
+            "is_verified":     u.is_verified,
+            "created_at":      u.created_at.isoformat() if u.created_at else None,
+            "last_login_at":   u.last_login_at.isoformat() if u.last_login_at else None,
+            "last_login_ip":   u.last_login_ip,
+            "active_sessions": session_counts.get(u.id, 0),
+        })
+
+    return {
+        "users":      user_list,
+        "total":      len(user_list),
+        "admin_count":  sum(1 for u in user_list if u["role"] == "admin"),
+        "active_count": sum(1 for u in user_list if u["is_active"]),
+    }
+
+
 # ── GET /auth/sessions ────────────────────────────────────────────────
 @router.get(
     "/sessions",
@@ -238,3 +288,26 @@ async def revoke_session(
 ):
     await service.revoke_session(session_id, current_user.id, db)
     return MessageResponse(message="Session revoked")
+
+
+# ── POST /auth/change-password ──────────────────────────────────────
+@router.post(
+    "/change-password",
+    response_model=MessageResponse,
+    summary="Change password (required on first login)",
+)
+async def change_password(
+    data:         ChangePasswordRequest,
+    current_user = Depends(get_current_user),
+    db:           AsyncSession = Depends(get_db),
+):
+    """Change the current user's password and clear the must_change_password flag."""
+    from auth.utils.password import verify_password, hash_password
+
+    if not verify_password(data.current_password, current_user.hashed_password):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
+
+    current_user.hashed_password      = hash_password(data.new_password)
+    current_user.must_change_password = False
+    await db.commit()
+    return MessageResponse(message="Password changed successfully")

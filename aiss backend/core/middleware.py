@@ -63,8 +63,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         "script-src 'self' 'unsafe-inline' https://cdn.plot.ly; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; "
-        "connect-src 'self' wss:; "
-        "font-src 'self'; "
+        "connect-src 'self' wss: ws: http://localhost:8000 http://localhost:8081 http://127.0.0.1:8000; "
+        "font-src 'self' data:; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self';"
@@ -83,9 +83,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "usb=(), magnetometer=(), gyroscope=(), accelerometer=()"
         )
         response.headers["Content-Security-Policy"]          = self._CSP
-        response.headers["Cross-Origin-Embedder-Policy"]     = "require-corp"
-        response.headers["Cross-Origin-Opener-Policy"]       = "same-origin"
-        response.headers["Cross-Origin-Resource-Policy"]     = "same-origin"
+        # Allow cross-origin requests from the frontend dev server
+        response.headers["Cross-Origin-Embedder-Policy"]     = "unsafe-none"
+        response.headers["Cross-Origin-Opener-Policy"]       = "same-origin-allow-popups"
+        response.headers["Cross-Origin-Resource-Policy"]     = "cross-origin"
 
         # HSTS — only on production HTTPS
         if ENVIRONMENT == "production":

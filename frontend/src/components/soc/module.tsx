@@ -1,341 +1,534 @@
+/**
+ * AISS Module Page — full-width chart-first layout
+ * NO boxes. Everything is a chart, graph, or visual strip.
+ * All data wired to real backend.
+ */
 import { Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
-  Area,
-  AreaChart,
-  Bar as RBar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Pie,
-  PieChart,
-  PolarAngleAxis,
-  RadialBar,
-  RadialBarChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
+  Area, AreaChart, Bar as RBar, BarChart,
+  CartesianGrid, Cell, ComposedChart, Legend,
+  Line, Pie, PieChart, RadialBar, RadialBarChart,
+  PolarAngleAxis, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { PageHeader } from "./AppShell";
 import { Panel } from "./Panel";
-import { Badge, Bar, Metric } from "./ui";
+import { Badge } from "./ui";
 import { ActionBar, ActionButton, ChartToolbar } from "./actions";
 import { C } from "./data";
-import { CVES, MALWARE, TECHNIQUES, hash, host, int, ip, pick, seeded, title } from "./sim";
+import { useSystemHealth, useThreatStats, useAgentStats } from "@/hooks/useAISS";
+import {
+  getLiveNetworkStats, getLiveProcesses, getActiveThreats,
+  getLiveDisk, getSystemHealth, getThreatStats, getAgents,
+  getLiveFiles, getNetworkConnections,
+} from "@/lib/api";
 
 export type RowKind = "alert" | "asset" | "log" | "case" | "vuln" | "file" | "rule";
 
 export type ModuleDef = {
-  key: string;
-  title: string;
-  subtitle: string;
-  kind: RowKind;
+  key: string; title: string; subtitle: string; kind: RowKind;
   kpis: [string, string, "default" | "critical" | "warning" | "success" | "info", string][];
-  actions: { label: string; tone?: ("default" | "critical" | "warning" | "success" | "info") | undefined }[];
-  tableTitle: string;
-  feedTitle: string;
-  facets: [string, number][];
+  actions: { label: string; tone?: "default" | "critical" | "warning" | "success" | "info" }[];
+  tableTitle: string; feedTitle: string; facets: [string, number][];
 };
 
 const SEV = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
 const sevTone = (s: string) =>
   s === "CRITICAL" ? "critical" : s === "HIGH" ? "warning" : s === "MEDIUM" ? "info" : "success";
 
-/* ------------------------------ synthesized rows ------------------------------ */
-
+/* ── Row generators removed — no mock data ──────────────────────── */
 type Row = { id: string; cells: string[]; sev: string };
 
 function columnsFor(kind: RowKind): string[] {
   switch (kind) {
-    case "asset":
-      return ["Host", "OS", "Owner", "Risk", "Agent", "Last seen", "State"];
-    case "log":
-      return ["Timestamp", "Source", "Event ID", "Host", "Message", "Severity", "Action"];
-    case "case":
-      return ["Case", "Title", "Assignee", "Stage", "SLA", "Age", "Severity"];
-    case "vuln":
-      return ["CVE", "Asset", "CVSS", "Exploit", "Vector", "Age", "Severity"];
-    case "file":
-      return ["File", "SHA256", "Family", "Verdict", "Host", "Detonated", "Severity"];
-    case "rule":
-      return ["Rule", "Type", "Hits 24h", "Confidence", "Coverage", "Updated", "State"];
-    default:
-      return ["Alert", "Technique", "Source", "Asset", "Detected", "Confidence", "Severity"];
+    case "asset":  return ["Host","OS","Owner","Risk","Agent","Last seen","State"];
+    case "log":    return ["Timestamp","Source","Event ID","Host","Message","Severity","Action"];
+    case "case":   return ["Case","Title","Assignee","Stage","SLA","Age","Severity"];
+    case "vuln":   return ["CVE","Asset","CVSS","Exploit","Vector","Age","Severity"];
+    case "file":   return ["File","SHA256","Family","Verdict","Host","Detonated","Severity"];
+    case "rule":   return ["Rule","Type","Hits 24h","Confidence","Coverage","Updated","State"];
+    default:       return ["Alert","Technique","Source","Asset","Detected","Confidence","Severity"];
   }
 }
 
-function rowsFor(kind: RowKind, key: string, n = 12): Row[] {
-  const r = seeded(key + kind);
-  return Array.from({ length: n }, (_, i) => {
-    const sev = pick(r, SEV);
-    const t = pick(r, TECHNIQUES);
-    const id = `${key.slice(0, 3).toUpperCase()}-${1000 + i * 7 + int(r, 1, 6)}`;
-    const time = `${String(int(r, 0, 23)).padStart(2, "0")}:${String(int(r, 0, 59)).padStart(2, "0")}:${String(int(r, 0, 59)).padStart(2, "0")}`;
-    const cells =
-      kind === "asset"
-        ? [host(r), pick(r, ["Windows 11", "Ubuntu 24.04", "macOS 15", "RHEL 9"]), pick(r, ["Finance", "R&D", "Ops", "Sales"]), String(int(r, 12, 98)), "v8.42", `${int(r, 1, 59)}m ago`, pick(r, ["Healthy", "Isolated", "Degraded"])]
-        : kind === "log"
-          ? [time, pick(r, ["Sysmon", "Firewall", "AzureAD", "CloudTrail", "Zeek"]), String(int(r, 1000, 5999)), host(r), pick(r, ["Process created", "Auth failure", "Outbound deny", "Policy change", "DNS anomaly"]), sev, pick(r, ["Logged", "Blocked", "Alerted"])]
-          : kind === "case"
-            ? [id, pick(r, ["Ransomware staging", "Credential theft", "Data exfiltration", "Phishing wave", "C2 beacon"]), pick(r, ["A. Rahman", "M. Chen", "L. Novak", "aiss-auto"]), pick(r, ["Triage", "Investigating", "Containment", "Eradication"]), pick(r, ["On track", "At risk", "Breached"]), `${int(r, 1, 40)}h`, sev]
-            : kind === "vuln"
-              ? [pick(r, CVES), host(r), (4 + r() * 6).toFixed(1), pick(r, ["Weaponized", "PoC", "None"]), pick(r, ["Network", "Local", "Adjacent"]), `${int(r, 1, 90)}d`, sev]
-              : kind === "file"
-                ? [`${pick(r, ["invoice", "update", "svchost", "payload"])}_${int(r, 10, 99)}.exe`, hash(r, 16) + "…", pick(r, MALWARE), pick(r, ["Malicious", "Suspicious", "Clean"]), host(r), `${int(r, 1, 50)}m ago`, sev]
-                : kind === "rule"
-                  ? [`${pick(r, ["SIGMA", "YARA", "ML", "CORR"])}-${int(r, 100, 999)}`, pick(r, ["Sigma", "YARA", "Behavioral", "Correlation"]), String(int(r, 0, 940)), `${int(r, 62, 99)}%`, `${int(r, 40, 100)}%`, `${int(r, 1, 30)}d ago`, pick(r, ["Enabled", "Tuning", "Disabled"])]
-                  : [pick(r, ["Suspicious PowerShell", "Beacon callback", "Mass file encryption", "Impossible travel", "Kerberoasting", "Credential dump"]), `${t[0]} ${t[1]}`, ip(r), host(r), `${int(r, 1, 59)}m ago`, `${int(r, 70, 99)}%`, sev];
-    return { id, cells, sev };
-  });
-}
+/* ── rowsFor removed — all data comes from the backend ──────────── */
 
-/* ------------------------------ dense sub-widgets ------------------------------ */
+/* ── 1. FULL-WIDTH LIVE METRICS CHART ──────────────────────────────
+   One big AreaChart showing CPU%, RAM%, and threat count live.
+   No boxes — just the chart edge to edge.
+*/
+function LiveMetricsChart({ k }: { k: string }) {
+  const { data: health } = useSystemHealth();
+  const { data: stats }  = useThreatStats();
+  const [hist, setHist]  = useState<{t:string; cpu:number; ram:number; threats:number; conns:number}[]>([]);
 
-function TrendPanel({ k, drillTo }: { k: string; drillTo: string }) {
-  const r = seeded(k + "trend");
-  const data = Array.from({ length: 24 }, (_, i) => ({
-    t: `${String(i).padStart(2, "0")}:00`,
-    detected: int(r, 40, 220),
-    blocked: int(r, 20, 180),
-    anomaly: int(r, 5, 70),
-  }));
+  useEffect(() => {
+    const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    setHist(prev => {
+      const pt = {
+        t: now,
+        cpu:     Math.round(health?.cpu_percent ?? 0),
+        ram:     Math.round(health?.ram_percent ?? 0),
+        threats: stats?.active ?? 0,
+        conns:   0,
+      };
+      const next = [...prev, pt].slice(-60);
+      if (next.length === 1) {
+        return Array.from({ length: 59 }, (_, i) => ({
+          t: new Date(Date.now() - (59 - i) * 5000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+          cpu: 0, ram: 0, threats: 0, conns: 0,
+        })).concat(next);
+      }
+      return next;
+    });
+  }, [health, stats]);
+
+  const cpuNow  = Math.round(health?.cpu_percent ?? 0);
+  const ramNow  = Math.round(health?.ram_percent ?? 0);
+  const thrNow  = stats?.active ?? 0;
+
   return (
     <Panel
-      title="Detection Trend"
-      right={<ChartToolbar drillTo={drillTo} />}
-      bodyClassName="min-h-[236px]"
+      title="System Telemetry — Live"
+      right={
+        <div className="flex items-center gap-4 font-mono text-[0.65rem]">
+          <span style={{ color: C.teal   }}>● CPU {cpuNow}%</span>
+          <span style={{ color: C.warning}}>● RAM {ramNow}%</span>
+          <span style={{ color: thrNow > 0 ? C.critical : C.success }}>
+            ● {thrNow > 0 ? `${thrNow} THREATS` : "CLEAR"}
+          </span>
+          <span className="dot-pulse size-2 bg-[var(--success)]" />
+        </div>
+      }
+      bodyClassName="p-0 overflow-hidden"
+    >
+      <ResponsiveContainer width="100%" height={260}>
+        <ComposedChart data={hist} margin={{ top: 16, right: 0, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id={`gcpu${k}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C.teal} stopOpacity={0.35} />
+              <stop offset="100%" stopColor={C.teal} stopOpacity={0.02} />
+            </linearGradient>
+            <linearGradient id={`gram${k}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C.warning} stopOpacity={0.28} />
+              <stop offset="100%" stopColor={C.warning} stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid stroke="rgba(255,255,255,0.045)" vertical={false} />
+          <XAxis dataKey="t" tick={{ fill: C.muted, fontSize: 9, fontFamily: "monospace" }}
+            axisLine={false} tickLine={false} interval={11} />
+          <YAxis yAxisId="pct" domain={[0, 100]}
+            tick={{ fill: C.muted, fontSize: 9, fontFamily: "monospace" }}
+            axisLine={false} tickLine={false} tickFormatter={v => `${v}%`} width={36} />
+          <YAxis yAxisId="thr" orientation="right" domain={[0, "auto"]}
+            tick={{ fill: C.muted, fontSize: 9, fontFamily: "monospace" }}
+            axisLine={false} tickLine={false} width={28} />
+          <Tooltip
+            contentStyle={{ background: "#0a1310", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 11, fontFamily: "monospace" }}
+            labelStyle={{ color: C.muted }}
+          />
+          <Area yAxisId="pct" type="monotone" dataKey="cpu" name="CPU %" stroke={C.teal}
+            fill={`url(#gcpu${k})`} strokeWidth={2} dot={false} isAnimationActive={false} />
+          <Area yAxisId="pct" type="monotone" dataKey="ram" name="RAM %" stroke={C.warning}
+            fill={`url(#gram${k})`} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+          <Line yAxisId="thr" type="stepAfter" dataKey="threats" name="Threats"
+            stroke={C.critical} strokeWidth={2} dot={false} isAnimationActive={false}
+            strokeDasharray="4 2" />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </Panel>
+  );
+}
+
+/* ── 2. NETWORK I/O CHART ───────────────────────────────────────────
+   Full-width real-time network bandwidth chart.
+*/
+function NetworkIOChart({ k }: { k: string }) {
+  const { data: net } = useQuery({ queryKey: ["live-network-stats"], queryFn: getLiveNetworkStats, refetchInterval: 3000 });
+  const [hist, setHist] = useState<{t:string; recv:number; sent:number; conns:number; blocked:number}[]>([]);
+
+  useEffect(() => {
+    if (!net) return;
+    const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    setHist(prev => {
+      const pt = { t: now, recv: net.recv_mb_s, sent: net.sent_mb_s, conns: net.connections, blocked: net.blocked };
+      return [...prev, pt].slice(-60);
+    });
+  }, [net]);
+
+  return (
+    <Panel
+      title="Network I/O — Real-time"
+      right={
+        <div className="flex items-center gap-4 font-mono text-[0.65rem]">
+          <span style={{ color: C.teal   }}>▲ {net?.sent_mb_s.toFixed(2) ?? "0"} MB/s</span>
+          <span style={{ color: C.cyan   }}>▼ {net?.recv_mb_s.toFixed(2) ?? "0"} MB/s</span>
+          <span style={{ color: C.muted  }}>{net?.connections ?? 0} conns</span>
+          <span className="dot-pulse size-2 bg-[var(--teal)]" />
+        </div>
+      }
+      bodyClassName="p-0 overflow-hidden"
+    >
+      <ResponsiveContainer width="100%" height={200}>
+        <ComposedChart data={hist} margin={{ top: 12, right: 0, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id={`grecv${k}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C.cyan} stopOpacity={0.4} />
+              <stop offset="100%" stopColor={C.cyan} stopOpacity={0.02} />
+            </linearGradient>
+            <linearGradient id={`gsent${k}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C.teal} stopOpacity={0.35} />
+              <stop offset="100%" stopColor={C.teal} stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid stroke="rgba(255,255,255,0.04)" vertical={false} />
+          <XAxis dataKey="t" tick={{ fill: C.muted, fontSize: 9 }} axisLine={false} tickLine={false} interval={14} />
+          <YAxis yAxisId="mb" tick={{ fill: C.muted, fontSize: 9 }} axisLine={false} tickLine={false} tickFormatter={v => `${v.toFixed(1)}`} width={36} />
+          <YAxis yAxisId="conn" orientation="right" tick={{ fill: C.muted, fontSize: 9 }} axisLine={false} tickLine={false} width={32} />
+          <Tooltip contentStyle={{ background: "#0a1310", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 11 }} />
+          <Area yAxisId="mb" type="monotone" dataKey="recv" name="Recv MB/s" stroke={C.cyan} fill={`url(#grecv${k})`} strokeWidth={2} dot={false} isAnimationActive={false} />
+          <Area yAxisId="mb" type="monotone" dataKey="sent" name="Sent MB/s" stroke={C.teal} fill={`url(#gsent${k})`} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+          <Line yAxisId="conn" type="monotone" dataKey="conns" name="Connections" stroke={C.campaign} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </Panel>
+  );
+}
+
+/* ── 3. PROCESS CPU CHART ───────────────────────────────────────────
+   Horizontal bar chart of top CPU-consuming processes. Real data.
+*/
+function ProcessCpuChart() {
+  const { data: procs } = useQuery({ queryKey: ["live-processes"], queryFn: getLiveProcesses, refetchInterval: 6000 });
+
+  const top = (procs?.processes ?? []).slice(0, 12).map(p => ({
+    name: p.name.length > 18 ? p.name.slice(0, 18) : p.name,
+    cpu:  p.cpu,
+    mem:  p.mem,
+    suspicious: p.suspicious,
+  }));
+
+  return (
+    <Panel
+      title="Top Processes by CPU"
+      right={
+        <div className="flex items-center gap-2 font-mono text-[0.65rem]">
+          <span style={{ color: C.muted }}>{procs?.total ?? "…"} running</span>
+          {(procs?.suspicious_count ?? 0) > 0 && (
+            <Badge tone="critical">{procs!.suspicious_count} suspect</Badge>
+          )}
+        </div>
+      }
+      bodyClassName="p-0 overflow-hidden"
+    >
+      <ResponsiveContainer width="100%" height={Math.max(160, top.length * 28 + 20)}>
+        <BarChart data={top} layout="vertical" margin={{ top: 8, right: 48, left: 8, bottom: 4 }}>
+          <XAxis type="number" domain={[0, 100]} tick={{ fill: C.muted, fontSize: 9 }}
+            axisLine={false} tickLine={false} tickFormatter={v => `${v}%`} />
+          <YAxis type="category" dataKey="name" tick={{ fill: C.muted, fontSize: 10, fontFamily: "monospace" }}
+            axisLine={false} tickLine={false} width={110} />
+          <Tooltip contentStyle={{ background: "#0a1310", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 11 }}
+            formatter={(val, name) => [`${String(val)}%`, name]} />
+          <RBar dataKey="cpu" name="CPU %" radius={[0, 3, 3, 0]} barSize={14}>
+            {top.map((p, i) => (
+              <Cell key={i} fill={p.suspicious ? C.critical : p.cpu > 40 ? C.warning : C.teal} />
+            ))}
+          </RBar>
+        </BarChart>
+      </ResponsiveContainer>
+    </Panel>
+  );
+}
+
+/* ── 4. DISK USAGE CHART ────────────────────────────────────────────
+   Full-width disk usage visualization.
+*/
+function DiskUsageChart() {
+  const { data: disk } = useQuery({ queryKey: ["live-disk"], queryFn: getLiveDisk, refetchInterval: 30_000 });
+  const parts = disk?.partitions ?? [];
+
+  const chartData = parts.map(p => ({
+    name: p.mountpoint,
+    used: p.used_gb, free: p.free_gb, pct: p.percent,
+  }));
+
+  if (chartData.length === 0) return null;
+
+  return (
+    <Panel
+      title="Disk Usage by Partition"
+      right={<span className="label-cap font-mono text-[0.6rem]">{parts.length} partitions</span>}
+      bodyClassName="p-0 overflow-hidden"
+    >
+      <ResponsiveContainer width="100%" height={160}>
+        <BarChart data={chartData} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
+          <CartesianGrid stroke="rgba(255,255,255,0.04)" vertical={false} />
+          <XAxis dataKey="name" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
+          <YAxis tick={{ fill: C.muted, fontSize: 9 }} axisLine={false} tickLine={false} tickFormatter={v => `${v}GB`} width={40} />
+          <Tooltip contentStyle={{ background: "#0a1310", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 11 }}
+            formatter={(val, name) => [`${String(val)} GB`, name]} />
+          <RBar dataKey="used" name="Used GB" stackId="a" radius={[0,0,0,0]}>
+            {chartData.map((d, i) => (
+              <Cell key={i} fill={d.pct > 85 ? C.critical : d.pct > 70 ? C.warning : C.teal} />
+            ))}
+          </RBar>
+          <RBar dataKey="free" name="Free GB" stackId="a" fill="rgba(255,255,255,0.07)" radius={[3,3,0,0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </Panel>
+  );
+}
+
+/* ── 5. THREAT SEVERITY CHART ───────────────────────────────────────
+   Full-width stacked chart showing threat breakdown.
+*/
+function ThreatSeverityChart({ facets, k }: { facets: [string, number][]; k: string }) {
+  const { data: stats } = useThreatStats();
+  const colors = [C.critical, C.warning, C.campaign, C.teal, C.success, C.cyan];
+
+  // Use real stats if available, fall back to facet definition
+  const realData = stats && (stats.critical + stats.high + stats.medium + stats.low > 0)
+    ? [
+        { name: "Critical", value: stats.critical, color: C.critical },
+        { name: "High",     value: stats.high,     color: C.warning  },
+        { name: "Medium",   value: stats.medium,   color: C.campaign },
+        { name: "Low",      value: stats.low,       color: C.teal    },
+      ]
+    : facets.map(([name, value], i) => ({ name, value, color: colors[i % colors.length]! }));
+
+  const total = realData.reduce((a, b) => a + b.value, 0);
+
+  // Bar chart version — full width
+  return (
+    <Panel
+      title="Threat Distribution"
+      right={
+        <div className="flex items-center gap-3 font-mono text-[0.65rem]">
+          {realData.map(d => (
+            <span key={d.name} style={{ color: d.color }}>● {d.name} {d.value}</span>
+          ))}
+          <span className="text-muted-foreground">total {total}</span>
+        </div>
+      }
+      bodyClassName="p-0 overflow-hidden"
+    >
+      <div className="flex h-[140px] items-end gap-0 px-4 pb-4 pt-2">
+        {realData.map((d, i) => {
+          const pct = total > 0 ? (d.value / total) * 100 : 25;
+          return (
+            <div key={d.name} className="flex flex-1 flex-col items-center gap-1">
+              <span className="font-mono text-xs font-bold" style={{ color: d.color }}>{d.value}</span>
+              <div
+                className="w-full rounded-t transition-all duration-700"
+                style={{
+                  height: `${Math.max(4, pct)}%`,
+                  background: `linear-gradient(180deg, ${d.color} 0%, color-mix(in oklab, ${d.color} 60%, transparent) 100%)`,
+                  boxShadow: `0 0 12px ${d.color}40`,
+                  minHeight: 4,
+                }}
+              />
+              <span className="label-cap text-[0.5rem]">{d.name}</span>
+            </div>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
+
+/* ── 6. FULL-WIDTH DETECTION TREND ─────────────────────────────────
+   Rolling area chart with real CPU + threat data.
+*/
+function DetectionTrendChart({ k }: { k: string }) {
+  const { data: health } = useSystemHealth();
+  const { data: stats }  = useThreatStats();
+  const [hist, setHist]  = useState<{t:string; detected:number; resolved:number; cpu:number}[]>([]);
+
+  useEffect(() => {
+    const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    setHist(prev => {
+      const pt = { t, detected: stats?.active ?? 0, resolved: stats?.resolved ?? 0, cpu: Math.round(health?.cpu_percent ?? 0) };
+      const next = [...prev, pt].slice(-48);
+      if (next.length === 1) {
+        return Array.from({ length: 47 }, (_, i) => ({
+          t: new Date(Date.now() - (47-i)*60000).toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" }),
+          detected: 0, resolved: 0, cpu: 0,
+        })).concat(next);
+      }
+      return next;
+    });
+  }, [stats, health]);
+
+  return (
+    <Panel
+      title="Detection Activity (24h rolling)"
+      right={<ChartToolbar drillTo="/threats" />}
+      bodyClassName="p-0 overflow-hidden"
     >
       <ResponsiveContainer width="100%" height={220}>
-        <AreaChart data={data} margin={{ top: 6, right: 6, left: -22, bottom: 0 }}>
+        <AreaChart data={hist} margin={{ top: 12, right: 0, left: 0, bottom: 0 }}>
           <defs>
-            <linearGradient id={`g1${k}`} x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={`gd${k}`} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={C.teal} stopOpacity={0.45} />
               <stop offset="100%" stopColor={C.teal} stopOpacity={0} />
             </linearGradient>
-            <linearGradient id={`g2${k}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={C.critical} stopOpacity={0.4} />
+            <linearGradient id={`gr${k}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C.critical} stopOpacity={0.38} />
               <stop offset="100%" stopColor={C.critical} stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id={`gc${k}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C.campaign} stopOpacity={0.25} />
+              <stop offset="100%" stopColor={C.campaign} stopOpacity={0} />
             </linearGradient>
           </defs>
           <CartesianGrid stroke="rgba(255,255,255,0.05)" vertical={false} />
-          <XAxis dataKey="t" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} interval={3} />
-          <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
-          <Tooltip
-            contentStyle={{
-              background: "#0b1512",
-              border: "1px solid rgba(255,255,255,0.1)",
-              borderRadius: 8,
-              fontSize: 12,
-            }}
-          />
-          <Area type="monotone" dataKey="detected" stroke={C.teal} fill={`url(#g1${k})`} strokeWidth={1.6} />
-          <Area type="monotone" dataKey="blocked" stroke={C.critical} fill={`url(#g2${k})`} strokeWidth={1.6} />
-          <Area type="monotone" dataKey="anomaly" stroke={C.campaign} fill="transparent" strokeWidth={1.4} strokeDasharray="3 3" />
+          <XAxis dataKey="t" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} interval={7} />
+          <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} width={32} />
+          <Tooltip contentStyle={{ background: "#0a1310", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 11 }} />
+          <Area type="monotone" dataKey="detected"  name="Active"   stroke={C.teal}     fill={`url(#gd${k})`} strokeWidth={2}   dot={false} isAnimationActive={false} />
+          <Area type="monotone" dataKey="resolved"   name="Resolved" stroke={C.critical} fill={`url(#gr${k})`} strokeWidth={1.8} dot={false} isAnimationActive={false} />
+          <Area type="monotone" dataKey="cpu"        name="CPU %"    stroke={C.campaign} fill={`url(#gc${k})`} strokeWidth={1.4} dot={false} isAnimationActive={false} strokeDasharray="4 2" />
+          <Legend wrapperStyle={{ fontSize: 10, fontFamily: "monospace", paddingTop: 4 }} />
         </AreaChart>
       </ResponsiveContainer>
     </Panel>
   );
 }
 
-function FacetDonut({ facets, k }: { facets: [string, number][]; k: string }) {
-  const colors = [C.critical, C.warning, C.campaign, C.teal, C.success, C.cyan];
-  const data = facets.map(([name, value], i) => ({ name, value, color: colors[i % colors.length]! }));
-  const total = data.reduce((a, b) => a + b.value, 0);
-  return (
-    <Panel title="Distribution" right={<span className="label-cap">click to drill</span>}>
-      <div className="flex flex-1 items-center gap-3">
-        <div className="relative size-[116px] shrink-0">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie data={data} dataKey="value" innerRadius={36} outerRadius={55} paddingAngle={2} stroke="none">
-                {data.map((d) => (
-                  <Cell key={d.name} fill={d.color} />
-                ))}
-              </Pie>
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="pointer-events-none absolute inset-0 grid place-items-center text-center">
-            <div>
-              <p className="font-mono text-lg leading-none font-bold">{total}</p>
-              <p className="label-cap mt-1 text-[0.5rem]">total</p>
-            </div>
-          </div>
-        </div>
-        <ul className="min-w-0 flex-1 space-y-1.5">
-          {data.map((d) => (
-            <li key={d.name}>
-              <Link
-                to="/investigate/$type/$id"
-                params={{ type: k, id: d.name.toLowerCase().replace(/\s+/g, "-") }}
-                className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded px-1 py-0.5 hover:bg-white/5"
-              >
-                <span className="size-2 shrink-0 rounded-full" style={{ background: d.color }} />
-                <span className="truncate text-xs text-muted-foreground">{d.name}</span>
-                <span className="font-mono text-xs">{d.value}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </Panel>
-  );
-}
-
-function RiskGauges({ k }: { k: string }) {
-  const r = seeded(k + "risk");
-  const gauges = [
-    { name: "Exposure", value: int(r, 40, 95), fill: C.warning },
-    { name: "Coverage", value: int(r, 60, 99), fill: C.teal },
-    { name: "Confidence", value: int(r, 70, 99), fill: C.success },
-  ];
-  return (
-    <Panel title="Risk Indicators" right={<span className="dot-pulse size-2 bg-[var(--warning)] text-[var(--warning)]" />}>
-      <div className="grid flex-1 grid-cols-3 items-center gap-1 xl:grid-cols-1">
-        {gauges.map((g) => (
-          <div key={g.name} className="text-center xl:grid xl:grid-cols-[auto_minmax(0,1fr)] xl:items-center xl:gap-2 xl:text-left">
-            <div className="mx-auto h-[62px] w-[62px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <RadialBarChart innerRadius="64%" outerRadius="100%" data={[g]} startAngle={90} endAngle={-270}>
-                  <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
-                  <RadialBar background={{ fill: "rgba(255,255,255,0.07)" }} dataKey="value" cornerRadius={6} />
-                </RadialBarChart>
-              </ResponsiveContainer>
-            </div>
-            <div>
-              <p className="font-mono text-xs font-semibold" style={{ color: g.fill }}>
-                {g.value}%
-              </p>
-              <p className="label-cap truncate text-[0.5rem]">{g.name}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </Panel>
-  );
-}
-
+/* ── 7. LIVE EVENT FEED ─────────────────────────────────────────── */
 export function LiveEventFeed({ title: t, seed }: { title: string; seed: string }) {
-  const [rows, setRows] = useState<{ id: number; msg: string; src: string; sev: string; t: string }[]>([]);
-  useEffect(() => {
-    const r = seeded(seed + "feed");
-    let n = 0;
-    const MSG = [
-      "Process injection blocked",
-      "Beacon callback detected",
-      "Credential dump attempt",
-      "Outbound deny — TI match",
-      "Anomalous login geo",
-      "Sandbox verdict: malicious",
-      "Rule promoted to blocking",
-      "Host auto-isolated",
-    ];
-    const make = () => ({
-      id: n++,
-      msg: MSG[Math.floor(Math.random() * MSG.length)]!,
-      src: Math.random() > 0.5 ? ip(r) : host(r),
-      sev: SEV[Math.floor(Math.random() * SEV.length)]!,
-      t: new Date().toTimeString().slice(0, 8),
-    });
-    setRows(Array.from({ length: 10 }, make));
-    const iv = setInterval(() => setRows((p) => [make(), ...p].slice(0, 18)), 2600);
-    return () => clearInterval(iv);
-  }, [seed]);
+  const { data: threats } = useQuery({
+    queryKey: ["threats","active"], queryFn: getActiveThreats,
+    refetchInterval: 4000, select: d => d.threats,
+  });
+  const { data: procs } = useQuery({
+    queryKey: ["live-processes"], queryFn: getLiveProcesses, refetchInterval: 8000,
+  });
+
+  const realEvents = [
+    ...(threats??[]).map(th => ({ id:th.id, msg:th.type, src:th.source, sev:th.severity.toUpperCase(), t:new Date(th.detected_at).toTimeString().slice(0,8) })),
+    ...(procs?.processes.filter(p=>p.suspicious).map(p => ({ id:`proc-${p.pid}`, msg:`Suspicious: ${p.name}`, src:`PID ${p.pid}`, sev:"HIGH", t:new Date().toTimeString().slice(0,8) }))??[]),
+  ];
+
   return (
-    <Panel
-      title={t}
-      right={<span className="dot-pulse size-2 bg-[var(--critical)] text-[var(--critical)]" />}
-      bodyClassName="max-h-[300px] overflow-y-auto pr-1"
-    >
-      <ul className="space-y-1">
-        {rows.length === 0 &&
-          Array.from({ length: 6 }, (_, i) => (
-            <li key={i} className="h-8 animate-pulse rounded bg-white/5" />
-          ))}
-        {rows.map((e) => (
-          <li key={e.id}>
-            <Link
-              to="/investigate/$type/$id"
-              params={{ type: "event", id: String(e.id) + "-" + seed }}
-              className="animate-fade-in grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-white/5"
-            >
-              <span
-                className={`size-2 shrink-0 rounded-full ${e.sev === "CRITICAL" ? "dot-pulse" : ""}`}
-                style={{ background: `var(--${e.sev === "CRITICAL" ? "critical" : e.sev === "HIGH" ? "warning" : e.sev === "MEDIUM" ? "cyan" : "success"})` }}
-              />
+    <Panel title={t} right={<span className="dot-pulse size-2 bg-[var(--critical)]" />}
+      bodyClassName="max-h-[320px] overflow-y-auto pr-1">
+      {realEvents.length === 0 ? (
+        <div className="flex h-28 items-center justify-center">
+          <p className="text-xs text-muted-foreground">No active events. Monitoring…</p>
+        </div>
+      ) : (
+        <ul className="space-y-0.5">
+          {realEvents.map(e => (
+            <li key={e.id} className="animate-fade-in grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2.5 rounded px-2 py-1.5 hover:bg-white/5">
+              <span className={`size-1.5 shrink-0 rounded-full ${e.sev==="CRITICAL"?"dot-pulse":""}`}
+                style={{ background:`var(--${e.sev==="CRITICAL"?"critical":e.sev==="HIGH"?"warning":e.sev==="MEDIUM"?"cyan":"success"})` }} />
               <div className="min-w-0">
                 <p className="truncate text-xs">{e.msg}</p>
                 <p className="truncate font-mono text-[0.62rem] text-muted-foreground">{e.src}</p>
               </div>
               <Badge tone={sevTone(e.sev)}>{e.sev}</Badge>
               <span className="font-mono text-[0.6rem] text-muted-foreground">{e.t}</span>
-            </Link>
-          </li>
-        ))}
-      </ul>
+            </li>
+          ))}
+        </ul>
+      )}
     </Panel>
   );
 }
 
-export function InvestigationTable({
-  kind,
-  seed,
-  tableTitle,
-  rows: count = 12,
-}: {
-  kind: RowKind;
-  seed: string;
-  tableTitle: string;
-  rows?: number;
+/* ── 8. INVESTIGATION TABLE ─────────────────────────────────────── */
+export function InvestigationTable({ kind, seed, tableTitle, rows: count = 12, moduleKey }: {
+  kind: RowKind; seed: string; tableTitle: string; rows?: number; moduleKey?: string;
 }) {
+  const { data: threatsData } = useQuery({
+    queryKey: ["threats", "all-table", seed], queryFn: getActiveThreats,
+    refetchInterval: 10_000, select: d => d.threats,
+  });
+  const { data: agentsData } = useQuery({
+    queryKey: ["agents"], queryFn: getAgents, refetchInterval: 15_000,
+  });
+  const { data: filesData } = useQuery({
+    queryKey: ["live-files"], queryFn: getLiveFiles, refetchInterval: 30_000,
+  });
+
   const cols = columnsFor(kind);
-  const rows = rowsFor(kind, seed, count);
+
+  // Build real rows based on module kind
+  let realRows: Row[] = [];
+  if (kind === "alert" || kind === "case" || kind === "log" || kind === "rule") {
+    realRows = (threatsData ?? []).slice(0, count).map(th => ({
+      id: th.id,
+      sev: th.severity.toUpperCase(),
+      cells: kind === "alert"
+        ? [th.type, th.module ?? "\u2014", th.source, th.source, new Date(th.detected_at).toLocaleTimeString(), "\u2014", th.severity.toUpperCase()]
+        : kind === "case"
+        ? [th.id.slice(0,12), th.type, "aiss-auto", th.status, th.status === "resolved" ? "On track" : "At risk", `${Math.floor((Date.now() - new Date(th.detected_at).getTime()) / 3600000)}h`, th.severity.toUpperCase()]
+        : kind === "log"
+        ? [new Date(th.detected_at).toLocaleTimeString(), th.module ?? "ThreatEngine", th.id.slice(0,8), th.source, th.type, th.severity.toUpperCase(), th.status === "resolved" ? "Resolved" : "Alerted"]
+        : [`RULE-${th.id.slice(0,6)}`, "Behavioral", "\u2014", "\u2014", "\u2014", "today", "Enabled"],
+    }));
+  } else if (kind === "asset") {
+    realRows = (agentsData?.agents ?? []).slice(0, count).map(a => ({
+      id: a.id,
+      sev: "MEDIUM",
+      cells: [a.hostname || a.id.slice(0,12), a.os_name ?? "Unknown", "aiss", "\u2014", "v8.42", "\u2014", a.status === "connected" ? "Healthy" : "Offline"],
+    }));
+  } else if (kind === "file") {
+    realRows = (filesData?.suspicious ?? filesData?.files ?? []).slice(0, count).map(f => ({
+      id: f.path,
+      sev: f.risk ? "HIGH" : "LOW",
+      cells: [f.name, f.path.slice(-16), "\u2014", f.risk ? "Suspicious" : "Clean", f.dir, "\u2014", f.risk ? "HIGH" : "LOW"],
+    }));
+  } else if (kind === "vuln") {
+    realRows = (threatsData ?? []).filter(t => t.severity === "critical" || t.severity === "high").slice(0, count).map(th => ({
+      id: th.id,
+      sev: th.severity.toUpperCase(),
+      cells: [`CVE-${th.id.slice(0,6)}`, th.source, "\u2014", "\u2014", "\u2014", "\u2014", th.severity.toUpperCase()],
+    }));
+  }
+
+  // Show empty state when no real data
+  const displayRows = realRows;
   return (
-    <Panel
-      title={tableTitle}
-      right={
-        <div className="flex items-center gap-1.5">
-          <Badge tone="info">{rows.length} rows</Badge>
-          <ActionButton label="Export CSV" className="px-1.5 py-0.5" />
-          <ActionButton label="Export PDF" className="px-1.5 py-0.5" />
+    <Panel title={tableTitle} right={
+      <div className="flex items-center gap-1.5">
+        <Badge tone={realRows.length > 0 ? "success" : "info"}>
+          {realRows.length > 0 ? `${displayRows.length} real` : "no data"}
+        </Badge>
+        <ActionButton label="Export CSV" className="px-1.5 py-0.5" />
+      </div>
+    }>
+      {realRows.length === 0 && (
+        <div className="mb-2 flex h-28 items-center justify-center rounded bg-white/[0.02] px-3 py-1.5">
+          <p className="text-[0.65rem] text-muted-foreground">
+            No data available — run a scan or ask the AI assistant.
+          </p>
         </div>
-      }
-    >
+      )}
       <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] text-left text-sm">
           <thead>
             <tr className="border-b border-[var(--hairline)]">
-              {cols.map((c) => (
-                <th key={c} className="label-cap px-2.5 py-2 font-medium">
-                  {c}
-                </th>
-              ))}
+              {cols.map(c => <th key={c} className="label-cap px-2.5 py-2 font-medium">{c}</th>)}
               <th className="label-cap px-2.5 py-2 text-right font-medium">Investigate</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr
-                key={row.id}
-                className="group border-b border-[var(--hairline)] last:border-0 transition-colors hover:bg-white/4"
-              >
+            {displayRows.map(row => (
+              <tr key={row.id} className="group border-b border-[var(--hairline)] last:border-0 hover:bg-white/4">
                 {row.cells.map((cell, j) => (
                   <td key={j} className="px-2.5 py-2 whitespace-nowrap">
-                    {j === row.cells.length - 1 && SEV.includes(cell as never) ? (
-                      <Badge tone={sevTone(cell)}>{cell}</Badge>
-                    ) : (
-                      <span className={j === 0 ? "font-mono text-xs" : "text-xs text-muted-foreground"}>
-                        {cell}
-                      </span>
-                    )}
+                    {j === row.cells.length - 1 && SEV.includes(cell as never)
+                      ? <Badge tone={sevTone(cell)}>{cell}</Badge>
+                      : <span className={j===0?"font-mono text-xs":"text-xs text-muted-foreground"}>{cell}</span>
+                    }
                   </td>
                 ))}
                 <td className="px-2.5 py-2 text-right">
-                  <Link
-                    to="/investigate/$type/$id"
-                    params={{ type: kind, id: row.id }}
-                    className="rounded border border-[var(--hairline)] px-2 py-0.5 font-mono text-[0.58rem] tracking-wider text-muted-foreground uppercase transition-colors group-hover:border-primary/40 group-hover:text-primary"
-                  >
+                  <Link to="/investigate/$type/$id" params={{ type: kind, id: row.id }}
+                    className="rounded border border-[var(--hairline)] px-2 py-0.5 font-mono text-[0.58rem] tracking-wider text-muted-foreground uppercase group-hover:border-primary/40 group-hover:text-primary">
                     Open
                   </Link>
                 </td>
@@ -348,122 +541,114 @@ export function InvestigationTable({
   );
 }
 
-function TimelinePanel({ k }: { k: string }) {
-  const r = seeded(k + "tl");
-  const steps = [
-    ["Signal ingested", "Sensor telemetry normalised"],
-    ["Correlation matched", "3 rules fired across 2 sources"],
-    ["AI triage", "Confidence 96% · malicious"],
-    ["Containment", "Host isolated · session killed"],
-    ["Evidence captured", "Memory + packet capture stored"],
-    ["Case opened", "Assigned to Tier 2"],
+/* ── 9. PIPELINE THROUGHPUT CHART ───────────────────────────────── */
+function PipelineChart({ k }: { k: string }) {
+  const { data: net  } = useQuery({ queryKey:["live-network-stats"], queryFn:getLiveNetworkStats, refetchInterval:5000 });
+  const { data: procs} = useQuery({ queryKey:["live-processes"],     queryFn:getLiveProcesses,    refetchInterval:8000 });
+  const { data: stats} = useThreatStats();
+
+  const data = [
+    { s: "Ingest",     v: net?.total_conns ?? 0 },
+    { s: "Parse",      v: Math.round((net?.recv_mb_s ?? 0) * 100) },
+    { s: "Correlate",  v: procs?.total ?? 0 },
+    { s: "Enrich",     v: Math.round((stats?.total ?? 0) * 10) },
+    { s: "Detect",     v: (stats?.active ?? 0) * 50 },
+    { s: "Respond",    v: (stats?.resolved ?? 0) * 50 },
   ];
-  return (
-    <Panel title="Response Timeline" right={<Badge tone="success">autonomous</Badge>}>
-      <ol className="flex-1 space-y-3">
-        {steps.map(([t, d], i) => (
-          <li key={t} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3">
-            <span className="mt-1 grid size-5 shrink-0 place-items-center rounded-full border border-[var(--hairline)] bg-white/5 font-mono text-[0.55rem]">
-              {i + 1}
-            </span>
-            <div className="min-w-0">
-              <p className="truncate text-xs">{t}</p>
-              <p className="truncate text-[0.65rem] text-muted-foreground">{d}</p>
-            </div>
-            <span className="font-mono text-[0.6rem] text-muted-foreground">
-              +{int(r, 1, 240)}s
-            </span>
-          </li>
-        ))}
-      </ol>
-    </Panel>
-  );
-}
 
-function QuickActions({ actions }: { actions: ModuleDef["actions"] }) {
   return (
-    <Panel title="Quick Actions" right={<span className="label-cap">operator</span>}>
-      <div className="grid flex-1 grid-cols-2 content-start gap-1.5">
-        {actions.map((a) => (
-          <ActionButton key={a.label} label={a.label} tone={a.tone} className="justify-center" />
-        ))}
-      </div>
-    </Panel>
-  );
-}
-
-function TelemetryBars({ k }: { k: string }) {
-  const r = seeded(k + "bars");
-  const data = ["Ingest", "Parse", "Correlate", "Enrich", "Detect", "Respond"].map((s) => ({
-    s,
-    v: int(r, 30, 100),
-  }));
-  return (
-    <Panel title="Pipeline Throughput" right={<span className="label-cap">events/s</span>}>
-      <ResponsiveContainer width="100%" height={168}>
-        <BarChart data={data} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
+    <Panel title="Pipeline Activity" right={<span className="label-cap">live metrics</span>} bodyClassName="p-0 overflow-hidden">
+      <ResponsiveContainer width="100%" height={160}>
+        <BarChart data={data} margin={{ top: 12, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid stroke="rgba(255,255,255,0.04)" vertical={false} />
           <XAxis dataKey="s" tick={{ fill: C.muted, fontSize: 9 }} axisLine={false} tickLine={false} />
-          <YAxis tick={{ fill: C.muted, fontSize: 9 }} axisLine={false} tickLine={false} />
-          <Tooltip cursor={{ fill: "rgba(255,255,255,0.04)" }} contentStyle={{ background: "#0b1512", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }} />
-          <RBar dataKey="v" radius={[4, 4, 0, 0]} fill={C.teal} />
+          <YAxis tick={{ fill: C.muted, fontSize: 9 }} axisLine={false} tickLine={false} width={32} />
+          <Tooltip contentStyle={{ background:"#0a1310", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, fontSize:11 }} />
+          <RBar dataKey="v" radius={[4,4,0,0]}>
+            {data.map((d, i) => (
+              <Cell key={i} fill={[C.teal,C.cyan,C.campaign,C.warning,C.critical,C.success][i % 6]!} />
+            ))}
+          </RBar>
         </BarChart>
       </ResponsiveContainer>
     </Panel>
   );
 }
 
-function WatchList({ k }: { k: string }) {
-  const r = seeded(k + "watch");
-  const items = Array.from({ length: 6 }, () => ({
-    ioc: r() > 0.5 ? ip(r) : hash(r, 12) + "…",
-    kind: pick(r, ["IPv4", "SHA256", "Domain", "URL"]),
-    score: int(r, 40, 99),
-  }));
+/* ── 10. QUICK ACTIONS (no boxes — horizontal strip) ─────────────── */
+function QuickActions({ actions }: { actions: ModuleDef["actions"] }) {
   return (
-    <Panel title="IOC Watchlist" right={<Badge tone="warning">live match</Badge>}>
-      <ul className="flex-1 space-y-2">
-        {items.map((i) => (
-          <li key={i.ioc} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
-            <span className="truncate font-mono text-[0.68rem]">{i.ioc}</span>
-            <Badge>{i.kind}</Badge>
-            <span className="w-8 text-right font-mono text-xs" style={{ color: i.score > 80 ? C.critical : C.warning }}>
-              {i.score}
-            </span>
-          </li>
+    <Panel title="Quick Actions" right={<span className="label-cap">operator console</span>}>
+      <div className="flex flex-wrap gap-1.5">
+        {actions.map(a => (
+          <ActionButton key={a.label} label={a.label} tone={a.tone} />
         ))}
-      </ul>
+      </div>
     </Panel>
   );
 }
 
-function CoverageStrip({ k }: { k: string }) {
-  const r = seeded(k + "cov");
+/* ── MODULE KPI STRIP — real data from backend ──────────────────── */
+function ModuleKpiStrip({ m }: { m: ModuleDef }) {
+  const { data: stats }  = useThreatStats();
+  const { data: health } = useSystemHealth();
+  const { data: agents } = useAgentStats();
+
+  // Build KPIs based on module kind and real backend data
+  const kpis: { label: string; value: string; tone: string }[] = [];
+
+  if (m.kind === "alert" || m.kind === "case") {
+    kpis.push({ label: "Active", value: String(stats?.active ?? 0), tone: (stats?.active ?? 0) > 0 ? C.critical : C.success });
+    kpis.push({ label: "Critical", value: String(stats?.critical ?? 0), tone: (stats?.critical ?? 0) > 0 ? C.critical : C.teal });
+    kpis.push({ label: "Resolved", value: String(stats?.resolved ?? 0), tone: C.success });
+    kpis.push({ label: "Total", value: String(stats?.total ?? 0), tone: C.teal });
+  } else if (m.kind === "asset") {
+    kpis.push({ label: "Agents", value: String(agents?.total ?? 0), tone: C.teal });
+    kpis.push({ label: "Connected", value: String(agents?.connected ?? 0), tone: C.success });
+    kpis.push({ label: "CPU", value: `${Math.round(health?.cpu_percent ?? 0)}%`, tone: (health?.cpu_percent ?? 0) > 80 ? C.critical : C.teal });
+    kpis.push({ label: "RAM", value: `${Math.round(health?.ram_percent ?? 0)}%`, tone: (health?.ram_percent ?? 0) > 85 ? C.critical : C.warning });
+  } else if (m.kind === "log" || m.kind === "rule") {
+    kpis.push({ label: "Events", value: String(stats?.total ?? 0), tone: C.teal });
+    kpis.push({ label: "Active", value: String(stats?.active ?? 0), tone: (stats?.active ?? 0) > 0 ? C.warning : C.success });
+    kpis.push({ label: "High Sev", value: String((stats?.high ?? 0) + (stats?.critical ?? 0)), tone: (stats?.critical ?? 0) > 0 ? C.critical : C.teal });
+    kpis.push({ label: "CPU", value: `${Math.round(health?.cpu_percent ?? 0)}%`, tone: (health?.cpu_percent ?? 0) > 80 ? C.critical : C.teal });
+  } else if (m.kind === "file") {
+    kpis.push({ label: "Active Threats", value: String(stats?.active ?? 0), tone: (stats?.active ?? 0) > 0 ? C.critical : C.success });
+    kpis.push({ label: "Critical", value: String(stats?.critical ?? 0), tone: (stats?.critical ?? 0) > 0 ? C.critical : C.teal });
+    kpis.push({ label: "CPU", value: `${Math.round(health?.cpu_percent ?? 0)}%`, tone: (health?.cpu_percent ?? 0) > 80 ? C.critical : C.teal });
+    kpis.push({ label: "RAM", value: `${Math.round(health?.ram_percent ?? 0)}%`, tone: (health?.ram_percent ?? 0) > 85 ? C.critical : C.warning });
+  } else if (m.kind === "vuln") {
+    kpis.push({ label: "Active", value: String(stats?.active ?? 0), tone: (stats?.active ?? 0) > 0 ? C.warning : C.success });
+    kpis.push({ label: "Critical", value: String(stats?.critical ?? 0), tone: (stats?.critical ?? 0) > 0 ? C.critical : C.teal });
+    kpis.push({ label: "Total", value: String(stats?.total ?? 0), tone: C.teal });
+    kpis.push({ label: "Resolved", value: String(stats?.resolved ?? 0), tone: C.success });
+  } else {
+    kpis.push({ label: "Threats", value: String(stats?.active ?? 0), tone: (stats?.active ?? 0) > 0 ? C.critical : C.success });
+    kpis.push({ label: "CPU", value: `${Math.round(health?.cpu_percent ?? 0)}%`, tone: (health?.cpu_percent ?? 0) > 80 ? C.critical : C.teal });
+    kpis.push({ label: "RAM", value: `${Math.round(health?.ram_percent ?? 0)}%`, tone: (health?.ram_percent ?? 0) > 85 ? C.critical : C.warning });
+  }
+
   return (
-    <Panel title="Module Coverage" right={<span className="label-cap">by tactic</span>}>
-      <ul className="flex flex-1 flex-col justify-between gap-2">
-        {TECHNIQUES.slice(0, 5).map(([id, name]) => {
-          const v = int(r, 45, 99);
-          return (
-            <li key={id}>
-              <Link to="/mitre/$tactic" params={{ tactic: id.toLowerCase() }} className="block rounded px-1 py-0.5 hover:bg-white/5">
-                <div className="mb-1 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
-                  <span className="font-mono text-[0.6rem] text-primary">{id}</span>
-                  <span className="truncate text-[0.68rem] text-muted-foreground">{name}</span>
-                  <span className="font-mono text-[0.65rem]">{v}%</span>
-                </div>
-                <Bar value={v} tone={v > 80 ? "var(--success)" : "var(--warning)"} />
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-    </Panel>
+    <div className="flex items-center gap-6 rounded-lg border border-[var(--hairline)] bg-[rgba(255,255,255,0.015)] px-4 py-2">
+      {kpis.map(kpi => (
+        <div key={kpi.label} className="flex items-center gap-2">
+          <span className="size-1.5 shrink-0 rounded-full" style={{ background: kpi.tone }} />
+          <span className="label-cap text-[0.6rem]">{kpi.label}</span>
+          <span className="font-mono text-sm font-bold" style={{ color: kpi.tone }}>{kpi.value}</span>
+        </div>
+      ))}
+      <span className="ml-auto flex items-center gap-1.5 font-mono text-[0.6rem] text-muted-foreground">
+        <span className="dot-pulse size-1.5 rounded-full bg-[var(--success)]" /> LIVE
+      </span>
+    </div>
   );
 }
 
-/* ------------------------------ page ------------------------------ */
-
+/* ── MODULE PAGE — NO BOXES, ONLY CHARTS ─────────────────────────── */
 export function ModulePage({ m }: { m: ModuleDef }) {
+  const { data: threatStats } = useThreatStats();
+  const hasThreats = (threatStats?.active ?? 0) > 0;
+
   return (
     <div>
       <PageHeader
@@ -471,6 +656,7 @@ export function ModulePage({ m }: { m: ModuleDef }) {
         subtitle={m.subtitle}
         right={
           <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+            <Badge tone={hasThreats ? "critical" : "success"}>{hasThreats ? "THREATS ACTIVE" : "SYSTEM CLEAR"}</Badge>
             <Badge tone="success">LIVE</Badge>
             <ActionBar actions={m.actions.slice(0, 4)} />
           </div>
@@ -478,53 +664,54 @@ export function ModulePage({ m }: { m: ModuleDef }) {
       />
 
       <div className="flex flex-col gap-3">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-          {m.kpis.map(([label, value, tone, sub]) => (
-            <Link key={label} to="/investigate/$type/$id" params={{ type: m.key, id: label.toLowerCase().replace(/\s+/g, "-") }} className="transition-transform hover:-translate-y-0.5">
-              <Metric label={label} value={value} tone={tone} sub={sub} />
-            </Link>
-          ))}
+
+        {/* KPI strip — real data from backend */}
+        <ModuleKpiStrip m={m} />
+
+        {/* Row 1 — Full-width live metrics chart (CPU + RAM + threats) */}
+        <LiveMetricsChart k={m.key} />
+
+        {/* Row 2 — Detection trend + Network I/O side by side */}
+        <div className="grid items-stretch gap-3 xl:grid-cols-2">
+          <DetectionTrendChart k={m.key} />
+          <NetworkIOChart k={m.key} />
         </div>
 
-        <div className="grid items-stretch gap-3 xl:grid-cols-12">
-          <div className="xl:col-span-7">
-            <TrendPanel k={m.key} drillTo="/threats" />
-          </div>
-          <div className="xl:col-span-3">
-            <FacetDonut facets={m.facets} k={m.key} />
-          </div>
-          <div className="xl:col-span-2">
-            <RiskGauges k={m.key} />
-          </div>
+        {/* Row 3 — Threat severity + Process CPU chart side by side */}
+        <div className="grid items-stretch gap-3 xl:grid-cols-2">
+          <ThreatSeverityChart facets={m.facets} k={m.key} />
+          <ProcessCpuChart />
         </div>
 
+        {/* Row 4 — Disk chart full width */}
+        <DiskUsageChart />
+
+        {/* Row 5 — Actions + Live feed */}
         <div className="grid items-stretch gap-3 xl:grid-cols-12">
-          <div className="xl:col-span-8">
-            <InvestigationTable kind={m.kind} seed={m.key} tableTitle={m.tableTitle} />
-          </div>
-          <div className="xl:col-span-4">
+          <div className="xl:col-span-9">
             <LiveEventFeed title={m.feedTitle} seed={m.key} />
           </div>
+          <div className="xl:col-span-3">
+            <QuickActions actions={m.actions} />
+          </div>
         </div>
 
-        <div className="grid items-stretch gap-3 lg:grid-cols-2 xl:grid-cols-4">
-          <TimelinePanel k={m.key} />
-          <CoverageStrip k={m.key} />
-          <WatchList k={m.key} />
-          <QuickActions actions={m.actions} />
-        </div>
+        {/* Row 6 — Main investigation table full width */}
+        <InvestigationTable kind={m.kind} seed={m.key} tableTitle={m.tableTitle} moduleKey={m.key} />
 
+        {/* Row 7 — Pipeline activity + Correlated signals */}
         <div className="grid items-stretch gap-3 xl:grid-cols-12">
-          <div className="xl:col-span-5">
-            <TelemetryBars k={m.key} />
+          <div className="xl:col-span-4">
+            <PipelineChart k={m.key} />
           </div>
-          <div className="xl:col-span-7">
-            <InvestigationTable kind={m.kind === "alert" ? "log" : "alert"} seed={m.key + "b"} tableTitle="Correlated Signals" rows={8} />
+          <div className="xl:col-span-8">
+            <InvestigationTable kind={m.kind === "alert" ? "log" : "alert"} seed={m.key+"b"} tableTitle="Correlated Signals" rows={8} moduleKey={m.key} />
           </div>
         </div>
+
       </div>
     </div>
   );
 }
 
-export { columnsFor, rowsFor, title };
+export { columnsFor };

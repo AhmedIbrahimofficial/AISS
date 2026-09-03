@@ -1,234 +1,300 @@
-"""AISS - Authentication Routes with DB + Email Verification"""
+"""
+AISS — OAuth social login routes
+Handles Google and GitHub OAuth2 flows end-to-end.
 
+SECURITY FIX: Instead of putting tokens in the URL fragment
+(visible in browser history, logs, referrer headers), we now:
+  1. Exchange the OAuth code on the backend.
+  2. Store the resulting AISS tokens server-side in a short-lived,
+     one-time-use exchange record (in-memory, TTL 60s).
+  3. Redirect the frontend to /oauth-callback?code=<one-time-code>
+  4. Frontend calls POST /api/auth/oauth/exchange with that code
+     to get the real tokens over a JSON response body.
+
+This keeps tokens out of URLs, fragments, and server-access logs.
+"""
 import os
-from datetime import datetime, timedelta
-
-from fastapi import APIRouter, HTTPException, status, Depends, BackgroundTasks
-from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel, EmailStr
+import secrets
+import uuid
+from datetime import datetime, timedelta, timezone
+from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from core.auth import (
-    create_access_token, create_refresh_token,
-    verify_password, hash_password,
-    generate_email_token, verify_token,
-)
 from core.database import get_db
-from core.models import User
-from core.email import send_verification_email, send_password_reset_email
+from auth.models import AuthUser, AuthSession, AuthOnboarding
+from auth.utils.tokens import (
+    create_access_token, generate_refresh_token,
+    hash_refresh_token, refresh_token_expiry,
+)
+from utils.oauth_helper import oauth_helper
 from utils.logger import setup_logger
 
-router = APIRouter()
-logger = setup_logger("auth_route")
+logger = setup_logger("oauth.routes")
 
-MAX_ATTEMPTS = 5
-LOCK_MINUTES = 15
+router = APIRouter(prefix="/auth/oauth", tags=["OAuth"])
 
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 
-# ── Schemas ───────────────────────────────────────────────────────────
-class RegisterRequest(BaseModel):
-    username: str
-    email:    EmailStr
-    password: str
-    role:     str = "viewer"
+# Environment-specific OAuth redirect URI override.
+# When the backend is behind a reverse proxy, the auto-detected request.base_url
+# may not match the public URL.  Set GOOGLE_OAUTH_REDIRECT_URI (or per-provider)
+# in .env to force the correct callback URL.
+_OAUTH_REDIRECT_OVERRIDES: dict[str, str] = {}
+for _prov in ("google", "github", "microsoft"):
+    _env_key = f"{_prov.upper()}_OAUTH_REDIRECT_URI"
+    _val = os.environ.get(_env_key, "").strip()
+    if _val:
+        _OAUTH_REDIRECT_OVERRIDES[_prov] = _val
 
+# ── CSRF state store (in-memory; swap for Redis in prod multi-instance) ──
+_oauth_states: dict[str, dict] = {}
 
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-
-class ForgotPasswordRequest(BaseModel):
-    email: EmailStr
-
-
-class ResetPasswordRequest(BaseModel):
-    token:        str
-    new_password: str
+# ── One-time exchange codes (TTL 60 s; single-use) ────────────────────
+# Maps exchange_code → {access_token, refresh_token, onboarding_done, expires}
+_exchange_codes: dict[str, dict] = {}
 
 
-# ── POST /api/auth/register ───────────────────────────────────────────
-@router.post("/register", status_code=201)
-async def register(
-    req:        RegisterRequest,
-    background: BackgroundTasks,
-    db:         AsyncSession = Depends(get_db),
-):
-    if len(req.username) < 3:
-        raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
-    if len(req.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+def _clean_states() -> None:
+    """Remove expired OAuth CSRF states."""
+    now = datetime.now(timezone.utc).timestamp()
+    expired = [k for k, v in _oauth_states.items() if v.get("expires", 0) < now]
+    for k in expired:
+        del _oauth_states[k]
 
-    existing = await db.execute(select(User).where(User.email == req.email))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Email already registered")
 
-    existing_user = await db.execute(select(User).where(User.username == req.username))
-    if existing_user.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Username already taken")
+def _clean_exchange_codes() -> None:
+    """Remove expired one-time exchange codes."""
+    now = datetime.now(timezone.utc).timestamp()
+    expired = [k for k, v in _exchange_codes.items() if v.get("expires", 0) < now]
+    for k in expired:
+        del _exchange_codes[k]
 
-    token   = generate_email_token()
-    expires = datetime.utcnow() + timedelta(hours=24)
 
-    user = User(
-        username             = req.username,
-        email                = req.email,
-        hashed_password      = hash_password(req.password),
-        role                 = req.role,
-        is_verified          = False,
-        email_verify_token   = token,
-        email_verify_expires = expires,
+# ── GET /auth/oauth/{provider} — redirect to OAuth provider ──────────
+@router.get("/{provider}")
+async def oauth_redirect(provider: str, request: Request):
+    if provider not in ("google", "github"):
+        raise HTTPException(400, f"Unsupported provider: {provider}")
+
+    if not oauth_helper.is_available():
+        raise HTTPException(503, "OAuth not available — authlib not installed")
+
+    configured = oauth_helper.configured_providers()
+    if provider not in configured:
+        raise HTTPException(
+            503,
+            f"{provider.capitalize()} OAuth not configured — "
+            f"set {provider.upper()}_OAUTH_CLIENT_ID and "
+            f"{provider.upper()}_OAUTH_CLIENT_SECRET in .env"
+        )
+
+    state = secrets.token_urlsafe(32)
+    _clean_states()
+    _oauth_states[state] = {
+        "provider": provider,
+        "expires":  (datetime.now(timezone.utc) + timedelta(minutes=10)).timestamp(),
+    }
+
+    redirect_uri = _OAUTH_REDIRECT_OVERRIDES.get(
+        provider, f"{request.base_url}api/auth/oauth/{provider}/callback"
     )
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
+    auth_url = oauth_helper.get_auth_url(provider, redirect_uri=redirect_uri, state=state)
+    if not auth_url:
+        raise HTTPException(500, "Failed to generate OAuth authorization URL")
 
-    background.add_task(send_verification_email, req.email, req.username, token)
-    logger.info(f"New user registered: {req.username}")
-
-    return {
-        "message":  "Account created! Please check your email to verify your account.",
-        "username": req.username,
-    }
+    return RedirectResponse(auth_url)
 
 
-# ── GET /api/auth/verify-email?token=xxx ─────────────────────────────
-@router.get("/verify-email")
-async def verify_email(token: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email_verify_token == token))
-    user   = result.scalar_one_or_none()
+# ── GET /auth/oauth/{provider}/callback — handle OAuth callback ───────
+@router.get("/{provider}/callback")
+async def oauth_callback(
+    provider: str,
+    code: str,
+    state: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    # ── 1. Validate CSRF state ─────────────────────────────────────────
+    stored = _oauth_states.pop(state, None)
+    if not stored or stored.get("provider") != provider:
+        logger.warning(f"OAuth callback: invalid state for {provider} from {request.client}")
+        raise HTTPException(400, "Invalid or expired OAuth state. Please try again.")
+
+    if stored.get("expires", 0) < datetime.now(timezone.utc).timestamp():
+        raise HTTPException(400, "OAuth state expired — please try the login again")
+
+    # ── 2. Exchange code for provider access token ─────────────────────
+    redirect_uri = _OAUTH_REDIRECT_OVERRIDES.get(
+        provider, f"{request.base_url}api/auth/oauth/{provider}/callback"
+    )
+    token_data = await oauth_helper.exchange_code(provider, code, redirect_uri)
+    if not token_data:
+        raise HTTPException(502, f"Failed to exchange authorization code with {provider}")
+
+    # ── 3. Fetch user profile ──────────────────────────────────────────
+    access_token = token_data.get("access_token", "")
+    profile = await oauth_helper.get_profile(provider, access_token)
+    if not profile:
+        raise HTTPException(502, f"Failed to fetch profile from {provider}")
+
+    # ── 4. Normalise provider-specific fields ──────────────────────────
+    if provider == "google":
+        email      = profile.get("email", "").lower()
+        name       = profile.get("name", email.split("@")[0])
+        subject    = profile.get("sub", "")
+        avatar_url = profile.get("picture", "")
+        # Verify email_verified claim if present (Google OIDC)
+        if profile.get("email_verified") is False:
+            raise HTTPException(400, "Your Google account email is not verified. Please verify it first.")
+    else:  # github
+        email      = (profile.get("email") or "").lower()
+        name       = profile.get("login", "") or profile.get("name", "")
+        subject    = str(profile.get("id", ""))
+        avatar_url = profile.get("avatar_url", "")
+
+    if not email:
+        raise HTTPException(
+            400,
+            f"{provider.capitalize()} account has no public email address. "
+            "Please add a verified email to your account and try again."
+        )
+
+    # ── 5. Find or create AISS user ────────────────────────────────────
+    user = await db.scalar(
+        select(AuthUser).where(AuthUser.email == email)
+    )
 
     if not user:
-        raise HTTPException(status_code=400, detail="Invalid verification token")
+        # New user — create account from OAuth
+        import re
+        base_username = re.sub(r"[^a-z0-9_]", "", name.lower().replace(" ", "_"))[:30] or "user"
+        username = base_username
+        # Ensure unique username
+        attempt = 0
+        while await db.scalar(select(AuthUser).where(AuthUser.username == username)):
+            attempt += 1
+            username = f"{base_username}{attempt}"
 
-    if user.is_verified:
-        return {"message": "Email already verified. You can log in."}
+        user = AuthUser(
+            username        = username,
+            email           = email,
+            hashed_password = "",          # no password for OAuth-only users
+            role            = "viewer",
+            is_active       = True,
+            is_verified     = True,        # email verified by OAuth provider
+            oauth_provider  = provider,
+            oauth_subject   = subject,
+            avatar_url      = avatar_url,
+        )
+        db.add(user)
+        await db.flush()
 
-    if user.email_verify_expires and user.email_verify_expires < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Token expired. Request a new one.")
+        # Create onboarding record
+        onboarding = AuthOnboarding(user_id=user.id)
+        db.add(onboarding)
+        logger.info(f"New OAuth user created: {email} via {provider}")
+    else:
+        # Existing user — update OAuth fields + last login
+        user.oauth_provider = provider
+        user.oauth_subject  = subject
+        user.avatar_url     = avatar_url
+        user.last_login_at  = datetime.utcnow()
+        user.last_login_ip  = request.client.host if request.client else ""
 
-    user.is_verified          = True
-    user.email_verify_token   = None
-    user.email_verify_expires = None
+        # Ensure onboarding record exists
+        if not user.onboarding:
+            db.add(AuthOnboarding(user_id=user.id))
+        logger.info(f"Existing user OAuth login: {email} via {provider}")
+
+    # ── 6. Create AISS session ─────────────────────────────────────────
+    raw_refresh = generate_refresh_token()
+    ip = request.client.host if request.client else "unknown"
+    ua = request.headers.get("User-Agent", "")
+    session = AuthSession(
+        user_id            = user.id,
+        refresh_token_hash = hash_refresh_token(raw_refresh),
+        ip_address         = ip,
+        user_agent         = ua,
+        device_info        = f"oauth-{provider}",
+        expires_at         = refresh_token_expiry(),
+    )
+    db.add(session)
     await db.commit()
 
-    logger.info(f"Email verified: {user.email}")
-    return {"message": "Email verified! You can now log in."}
+    aiss_access = create_access_token(user.id, user.email, user.role)
+    onboarding_done = user.onboarding.is_completed if user.onboarding else False
 
-
-# ── POST /api/auth/login ──────────────────────────────────────────────
-@router.post("/login")
-async def login(
-    form: OAuth2PasswordRequestForm = Depends(),
-    db:   AsyncSession              = Depends(get_db),
-):
-    result = await db.execute(select(User).where(User.username == form.username))
-    user   = result.scalar_one_or_none()
-
-    if not user or not verify_password(form.password, user.hashed_password):
-        if user:
-            user.login_attempts += 1
-            if user.login_attempts >= MAX_ATTEMPTS:
-                user.locked_until   = datetime.utcnow() + timedelta(minutes=LOCK_MINUTES)
-                user.login_attempts = 0
-            await db.commit()
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-
-    if user.is_locked():
-        raise HTTPException(status_code=403, detail=f"Account locked. Try again in {LOCK_MINUTES} minutes.")
-
-    if not user.is_verified:
-        raise HTTPException(status_code=403, detail="Email not verified. Check your inbox.")
-
-    if not user.is_active:
-        raise HTTPException(status_code=403, detail="Account is deactivated.")
-
-    user.login_attempts = 0
-    user.locked_until   = None
-    user.last_login     = datetime.utcnow()
-    await db.commit()
-
-    access_token  = create_access_token(data={"sub": user.username})
-    refresh_token = create_refresh_token(data={"sub": user.username})
-
-    logger.info(f"Login successful: {user.username}")
-    return {
-        "access_token":  access_token,
-        "refresh_token": refresh_token,
-        "token_type":    "bearer",
-        "username":      user.username,
-        "role":          user.role,
+    # ── 7. Issue a one-time exchange code (SECURE handoff) ────────────
+    # Tokens never touch the URL — the frontend exchanges this short-lived
+    # opaque code for the real tokens via POST /api/auth/oauth/exchange.
+    exchange_code = secrets.token_urlsafe(32)
+    _clean_exchange_codes()
+    _exchange_codes[exchange_code] = {
+        "access_token":    aiss_access,
+        "refresh_token":   raw_refresh,
+        "onboarding_done": onboarding_done,
+        "expires": (datetime.now(timezone.utc) + timedelta(seconds=60)).timestamp(),
+        "used": False,
     }
 
-
-# ── POST /api/auth/refresh ────────────────────────────────────────────
-@router.post("/refresh")
-async def refresh(req: RefreshRequest, db: AsyncSession = Depends(get_db)):
-    payload = verify_token(req.refresh_token, token_type="refresh")
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
-
-    result = await db.execute(select(User).where(User.username == payload.get("sub")))
-    user   = result.scalar_one_or_none()
-
-    if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="User not found or inactive")
-
-    access_token = create_access_token(data={"sub": user.username})
-    return {"access_token": access_token, "token_type": "bearer"}
+    # Redirect frontend to callback page with only the short-lived opaque code
+    # — NOT with the actual tokens, so they never appear in URLs or logs.
+    redirect = f"{FRONTEND_URL}/oauth-callback?code={exchange_code}"
+    return RedirectResponse(redirect, status_code=302)
 
 
-# ── GET /api/auth/me ──────────────────────────────────────────────────
-@router.get("/me")
-async def me(
-    db:   AsyncSession = Depends(get_db),
-    user: dict         = Depends(__import__("core.auth", fromlist=["get_current_user"]).get_current_user),
-):
-    result  = await db.execute(select(User).where(User.username == user.get("sub")))
-    db_user = result.scalar_one_or_none()
+# ── POST /api/auth/oauth/exchange — redeem one-time code for tokens ───
+@router.post("/exchange")
+async def oauth_exchange(request: Request):
+    """
+    Redeem the one-time exchange code issued by the OAuth callback.
+    Returns access_token + refresh_token in the JSON body (never in URL).
+    Single-use: the code is deleted immediately after first use.
+    """
+    body = await request.json()
+    code = body.get("code", "")
 
-    if not db_user:
-        raise HTTPException(status_code=404, detail="User not found")
+    if not code:
+        raise HTTPException(400, "Missing exchange code")
 
-    return db_user.to_dict()
+    _clean_exchange_codes()
+    record = _exchange_codes.get(code)
+
+    if not record:
+        logger.warning(f"OAuth exchange: unknown or expired code from {request.client}")
+        raise HTTPException(400, "Invalid or expired exchange code. Please log in again.")
+
+    if record.get("used"):
+        # Possible replay attack — log and deny
+        logger.warning(f"OAuth exchange: code reuse attempt from {request.client}")
+        # Delete to prevent further attempts
+        _exchange_codes.pop(code, None)
+        raise HTTPException(400, "Exchange code already used. Please log in again.")
+
+    if record.get("expires", 0) < datetime.now(timezone.utc).timestamp():
+        _exchange_codes.pop(code, None)
+        raise HTTPException(400, "Exchange code expired. Please log in again.")
+
+    # Mark used and remove immediately (single-use)
+    record["used"] = True
+    _exchange_codes.pop(code, None)
+
+    return JSONResponse({
+        "access_token":    record["access_token"],
+        "refresh_token":   record["refresh_token"],
+        "onboarding_done": record["onboarding_done"],
+        "token_type":      "bearer",
+    })
 
 
-# ── POST /api/auth/forgot-password ───────────────────────────────────
-@router.post("/forgot-password")
-async def forgot_password(
-    req:        ForgotPasswordRequest,
-    background: BackgroundTasks,
-    db:         AsyncSession = Depends(get_db),
-):
-    result = await db.execute(select(User).where(User.email == req.email))
-    user   = result.scalar_one_or_none()
-
-    if user and user.is_verified:
-        token                    = generate_email_token()
-        user.reset_token         = token
-        user.reset_token_expires = datetime.utcnow() + timedelta(hours=1)
-        await db.commit()
-        background.add_task(send_password_reset_email, user.email, user.username, token)
-
-    return {"message": "If that email is registered, a reset link has been sent."}
-
-
-# ── POST /api/auth/reset-password ────────────────────────────────────
-@router.post("/reset-password")
-async def reset_password(req: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.reset_token == req.token))
-    user   = result.scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(status_code=400, detail="Invalid reset token")
-
-    if user.reset_token_expires and user.reset_token_expires < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Reset token expired. Request a new one.")
-
-    user.hashed_password     = hash_password(req.new_password)
-    user.reset_token         = None
-    user.reset_token_expires = None
-    await db.commit()
-
-    logger.info(f"Password reset: {user.email}")
-    return {"message": "Password reset successful. You can now log in."}
+# ── GET /api/auth/oauth/providers — list configured providers ─────────
+@router.get("/providers")
+async def list_providers():
+    """Return which OAuth providers are currently configured."""
+    configured = oauth_helper.configured_providers() if oauth_helper.is_available() else []
+    return {
+        "providers": configured,
+        "available": oauth_helper.is_available(),
+    }

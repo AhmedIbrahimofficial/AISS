@@ -22,7 +22,7 @@ logger = setup_logger("auth.tokens")
 SECRET_KEY              = os.environ.get("SECRET_KEY", "change-me-in-production")
 ALGORITHM               = "HS256"
 ACCESS_TOKEN_EXPIRE_MIN = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
-REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "30"))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "365"))
 
 
 # ── Access token ──────────────────────────────────────────────────────

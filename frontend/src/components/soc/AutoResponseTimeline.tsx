@@ -1,61 +1,120 @@
+/**
+ * Auto-Response Timeline — full-width visual.
+ * Shows real resolved threats as a timeline + rolling activity chart.
+ * No mock data — shows empty state when no resolved threats exist.
+ */
 import { useEffect, useState } from "react";
+import {
+  Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from "recharts";
 import { Panel } from "./Panel";
-import { C, timeLabel } from "./data";
+import { Badge } from "./ui";
+import { C } from "./data";
+import { useAllThreats, useThreatStats } from "@/hooks/useAISS";
 
-const ACTIONS = [
-  { label: "IP 45.83.12.77 blackholed", color: C.critical },
-  { label: "SSH session terminated", color: C.warning },
-  { label: "Host EPA-412 quarantined", color: C.campaign },
-  { label: "Signature set 8.42 pushed", color: C.cyan },
-  { label: "Ransomware process killed", color: C.critical },
-  { label: "Firewall rule auto-committed", color: C.success },
-];
+type Item = { id: string; label: string; color: string; time: string };
+type HistPt = { t: string; resolved: number; active: number; rate: number };
 
-type Item = { id: number; label: string; color: string; time: string };
-
-let seq = 0;
 export function AutoResponseTimeline() {
-  const [items, setItems] = useState<Item[]>([]);
+  const { data: threats } = useAllThreats();
+  const { data: stats   } = useThreatStats();
 
+  const [hist, setHist] = useState<HistPt[]>([]);
+
+  // Rolling activity history
   useEffect(() => {
-    const make = (): Item => {
-      const a = ACTIONS[Math.floor(Math.random() * ACTIONS.length)]!;
-      return { id: seq++, label: a.label, color: a.color, time: timeLabel(new Date()) };
-    };
-    setItems(Array.from({ length: 5 }, make));
-    const t = setInterval(() => setItems((i) => [...i.slice(-5), make()]), 5000);
-    return () => clearInterval(t);
-  }, []);
+    const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    setHist(prev => {
+      const pt: HistPt = {
+        t,
+        resolved: stats?.resolved ?? 0,
+        active:   stats?.active   ?? 0,
+        rate:     stats && stats.total > 0 ? Math.round((stats.resolved / stats.total) * 100) : 0,
+      };
+      const next = [...prev, pt].slice(-40);
+      if (next.length === 1) {
+        return Array.from({ length: 39 }, (_, i) => ({
+          t: new Date(Date.now() - (39-i)*60000).toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" }),
+          resolved: 0, active: 0, rate: 0,
+        })).concat(next);
+      }
+      return next;
+    });
+  }, [stats]);
+
+  // Use real resolved threats for timeline (no mock fallback)
+  const resolved = threats?.filter(t => t.status === "resolved").slice(-8) ?? [];
+  const items: Item[] = resolved.map(t => ({
+    id: t.id,
+    label: `${t.type} — ${t.source}`,
+    color: t.severity === "critical" ? C.critical : t.severity === "high" ? C.warning : C.success,
+    time: new Date(t.resolved_at ?? t.detected_at).toTimeString().slice(0, 8),
+  }));
+
+  const autonomy = stats && stats.total > 0
+    ? Math.round((stats.resolved / stats.total) * 100)
+    : 0;
 
   return (
-    <Panel title="Auto-Response Timeline" bodyClassName="overflow-x-auto">
-      <div className="relative min-w-[520px] pt-6">
-        <div className="absolute left-0 right-0 top-8 h-px bg-[linear-gradient(90deg,transparent,rgba(59,130,246,0.5),transparent)]" />
-        <div className="flex justify-between gap-4">
-          {items.map((it) => (
-            <div key={it.id} className="flex-1 text-center">
-              <span
-                className="mx-auto block size-2.5 rounded-full"
-                style={{ backgroundColor: it.color }}
-              />
-              <p className="mt-3 font-mono text-[0.6rem] text-[#7C8C85]">{it.time}</p>
-              <p className="mt-1 text-[0.68rem] leading-snug text-[#E6EDEA]">{it.label}</p>
-            </div>
-          ))}
+    <Panel
+      title="Auto-Response Timeline"
+      right={
+        <div className="flex items-center gap-2">
+          <Badge tone="success">autonomous</Badge>
+          <span className="font-mono text-[0.6rem] text-muted-foreground">{autonomy}% auto-resolved</span>
         </div>
-      </div>
-      <div className="mt-auto grid grid-cols-2 gap-2 pt-4 sm:grid-cols-4">
-        {[
-          ["Actions / hour", "146"],
-          ["Autonomous rate", "92%"],
-          ["Analyst overrides", "4"],
-          ["Rollback events", "0"],
-        ].map(([k, v]) => (
-          <div key={k} className="rounded-md border border-[var(--hairline)] bg-white/3 px-3 py-2">
-            <p className="label-cap truncate text-[0.55rem]">{k}</p>
-            <p className="mt-1 font-mono text-base">{v}</p>
+      }
+      bodyClassName="p-0 overflow-hidden flex flex-col"
+    >
+      {/* Rolling activity chart — full width */}
+      <ResponsiveContainer width="100%" height={110}>
+        <AreaChart data={hist} margin={{ top: 8, right: 0, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id="gResolved" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C.success} stopOpacity={0.4} />
+              <stop offset="100%" stopColor={C.success} stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="gActive" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C.critical} stopOpacity={0.35} />
+              <stop offset="100%" stopColor={C.critical} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid stroke="rgba(255,255,255,0.04)" vertical={false} />
+          <XAxis dataKey="t" tick={{ fill: C.muted, fontSize: 8 }} axisLine={false} tickLine={false} interval={9} />
+          <YAxis tick={{ fill: C.muted, fontSize: 8 }} axisLine={false} tickLine={false} width={24} />
+          <Tooltip contentStyle={{ background:"#0a1310", border:"1px solid rgba(255,255,255,0.1)", borderRadius:6, fontSize:10 }} />
+          <Area type="monotone" dataKey="resolved" name="Resolved" stroke={C.success} fill="url(#gResolved)" strokeWidth={2} dot={false} isAnimationActive={false} />
+          <Area type="monotone" dataKey="active"   name="Active"   stroke={C.critical} fill="url(#gActive)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+        </AreaChart>
+      </ResponsiveContainer>
+
+      {/* Horizontal event timeline */}
+      <div className="relative overflow-x-auto border-t border-[var(--hairline)] px-4 pb-3 pt-5">
+        {items.length === 0 ? (
+          <div className="flex h-16 items-center justify-center">
+            <p className="text-xs text-muted-foreground">No automated responses yet</p>
           </div>
-        ))}
+        ) : (
+          <>
+            {/* Timeline line */}
+            <div className="absolute left-4 right-4 top-7 h-px bg-gradient-to-r from-transparent via-[rgba(59,130,246,0.5)] to-transparent" />
+
+            <div className="flex gap-4 min-w-max">
+              {items.map(item => (
+                <div key={item.id} className="flex flex-col items-center gap-1 w-28">
+                  <span
+                    className="size-2.5 rounded-full shrink-0 z-10"
+                    style={{ backgroundColor: item.color, boxShadow: `0 0 8px ${item.color}` }}
+                  />
+                  <p className="font-mono text-[0.55rem] text-muted-foreground mt-1">{item.time}</p>
+                  <p className="text-center text-[0.6rem] leading-snug text-foreground" title={item.label}>
+                    {item.label.length > 28 ? item.label.slice(0, 28) + "…" : item.label}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </Panel>
   );

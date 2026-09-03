@@ -1,26 +1,23 @@
-"""AISS - AI Analyst Module
-Supports both Anthropic (Claude) and OpenAI (GPT) providers.
-Provider is auto-detected from the API key, or set explicitly.
+"""AISS — AI Analyst Module (OpenRouter)
 
-Rate limiting:
-  - tenacity @retry with exponential backoff on HTTP 429
-  - Random 1-3s jitter before every Claude request
+All LLM calls go through OpenRouter via the shared llm_router singleton.
+Set OPENROUTER_API_KEY in .env — no other AI keys required.
 """
+from __future__ import annotations
 
-import asyncio, json, os, random, re, httpx, logging
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, before_sleep_log
+import json
+import logging
+import re
+from typing import Any
+
 from models.threat import Threat
+from modules.llm_router import llm_router
 from utils.logger import setup_logger
 
 logger = setup_logger("ai_analyst")
 
-CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
-CLAUDE_MODEL   = "claude-sonnet-4-20250514"
-OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
-OPENAI_MODEL   = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-
 SYSTEM_PROMPT = """You are AISS's AI Security Analyst — an elite cybersecurity expert.
-When given a threat report, respond ONLY with a JSON object (no markdown) with this structure:
+When given a threat report, respond ONLY with a valid JSON object (no markdown, no extra text):
 {
   "threat_assessment": "...",
   "risk_level": "CRITICAL|HIGH|MEDIUM|LOW",
@@ -34,10 +31,9 @@ When given a threat report, respond ONLY with a JSON object (no markdown) with t
 }"""
 
 
-def _is_rate_limit(exc):
-    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429
-
-def _parse_json(text):
+def _parse_json(text: str) -> dict:
+    """Parse JSON from LLM output, stripping markdown fences if present."""
+    text = re.sub(r"```(?:json)?", "", text).strip().strip("`").strip()
     try:
         return json.loads(text)
     except Exception:
@@ -47,118 +43,63 @@ def _parse_json(text):
                 return json.loads(m.group())
             except Exception:
                 pass
-        return {"threat_assessment": text}
-
-
-async def _call_openai(api_key, messages, max_tokens=1000, model=None):
-    """Call OpenAI chat completions and return text."""
-    async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.post(
-            OPENAI_API_URL,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": model or OPENAI_MODEL, "max_tokens": max_tokens, "messages": messages},
-        )
-        if r.status_code == 429:
-            r.raise_for_status()
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+    return {"threat_assessment": text}
 
 
 class AIAnalyst:
     """
-    AI Analyst supporting Anthropic Claude and OpenAI GPT.
-
-    Provider auto-detection:
-      - api_key starts with "sk-ant-"  → Claude
-      - api_key starts with "sk-"      → OpenAI
-      - provider="openai" / "claude"   → explicit override
-      - Falls back to env vars: ANTHROPIC_API_KEY / OPENAI_API_KEY
+    Threat analysis via OpenRouter (all models via llm_router).
+    The `api_key` and `provider` params are accepted for backward
+    compatibility but ignored — OpenRouter is always used.
     """
 
-    def __init__(self, api_key: str = "", provider: str = "auto"):
-        self.api_key   = api_key or ""
-        self._provider = self._detect(provider, api_key)
-
-    def _detect(self, provider, key):
-        if provider in ("claude", "openai"):
-            return provider
-        if key.startswith("sk-ant-") or os.environ.get("ANTHROPIC_API_KEY", "").startswith("sk-ant-"):
-            return "claude"
-        if key.startswith("sk-") or os.environ.get("OPENAI_API_KEY"):
-            return "openai"
-        return "claude"
+    def __init__(self, api_key: str = "", provider: str = "auto") -> None:
+        # Kept for backward compatibility with existing callers
+        self._provider = "openrouter"
 
     @property
-    def provider(self):
+    def provider(self) -> str:
         return self._provider
 
-    @retry(
-        retry=retry_if_exception(_is_rate_limit),
-        wait=wait_exponential(multiplier=1, min=1, max=30),
-        stop=stop_after_attempt(4),
-        before_sleep=before_sleep_log(logging.getLogger("cybersecurity.ai_analyst"), logging.WARNING),
-        reraise=True,
-    )
-    async def _post_claude(self, payload):
-        await asyncio.sleep(random.uniform(1.0, 3.0))
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.post(
-                CLAUDE_API_URL,
-                headers={"Content-Type": "application/json",
-                         "x-api-key": self.api_key,
-                         "anthropic-version": "2023-06-01"},
-                json=payload,
-            )
-            if r.status_code == 429:
-                r.raise_for_status()
-            r.raise_for_status()
-            return r.json()
-
-    async def _complete(self, user_prompt, system=SYSTEM_PROMPT, max_tokens=1000):
-        """Call configured provider and return text response."""
-        if self._provider == "openai":
-            key = self.api_key or os.environ.get("OPENAI_API_KEY", "")
-            if not key:
-                raise ValueError("OPENAI_API_KEY not configured")
-            return await _call_openai(
-                key,
-                [{"role": "system", "content": system},
-                 {"role": "user",   "content": user_prompt}],
-                max_tokens=max_tokens,
-            )
-        else:
-            key = self.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
-            if not key:
-                raise ValueError("ANTHROPIC_API_KEY not configured")
-            self.api_key = key
-            data = await self._post_claude({
-                "model": CLAUDE_MODEL, "max_tokens": max_tokens,
-                "system": system,
-                "messages": [{"role": "user", "content": user_prompt}],
-            })
-            return data["content"][0]["text"]
+    async def _complete(
+        self,
+        user_prompt: str,
+        system: str = SYSTEM_PROMPT,
+        max_tokens: int = 1000,
+    ) -> str:
+        return await llm_router.complete(
+            user_prompt, system=system, max_tokens=max_tokens
+        )
 
     async def analyze_threat(self, threat: Threat) -> dict:
-        prompt = f"""Analyze this cybersecurity threat detected by AISS:
-Type: {threat.type} | Severity: {threat.severity} | Source: {threat.source}
-Module: {threat.module} | Detected: {threat.detected_at}
-Description: {threat.description}
-Metadata: {json.dumps(threat.metadata, indent=2)}"""
+        prompt = (
+            f"Analyze this cybersecurity threat detected by AISS:\n"
+            f"Type: {threat.type} | Severity: {threat.severity} | Source: {threat.source}\n"
+            f"Module: {threat.module} | Detected: {threat.detected_at}\n"
+            f"Description: {threat.description}\n"
+            f"Metadata: {json.dumps(threat.metadata or {}, indent=2)}"
+        )
         try:
-            text = await self._complete(prompt, max_tokens=1000)
+            text   = await self._complete(prompt, max_tokens=1200)
             result = _parse_json(text)
-            logger.info(f"Analysis complete [{self._provider}]: {threat.id[:8]}")
+            logger.info("Threat analysis complete: %s", threat.id[:8])
             return result
-        except Exception as e:
-            logger.error(f"Analysis failed [{self._provider}] {threat.id[:8]}: {e}")
+        except Exception as exc:
+            logger.error("Threat analysis failed %s: %s", threat.id[:8], exc)
             return {
-                "threat_assessment": f"Automated: {threat.type} from {threat.source}",
-                "risk_level": str(threat.severity).upper(),
-                "recommended_response": "Isolate source, investigate logs, apply patches",
-                "resolution_message": f"✅ {threat.type} neutralized",
+                "threat_assessment": f"Automated detection: {threat.type} from {threat.source}",
+                "risk_level":        str(threat.severity).upper(),
+                "recommended_response": "Isolate source, review logs, apply patches.",
+                "resolution_message": f"✅ {threat.type} flagged for review",
             }
 
-    async def analyze_threats_batch(self, threats, *, delay_between=2.0):
+    async def analyze_threats_batch(
+        self,
+        threats: list[Any],
+        *,
+        delay_between: float = 1.5,
+    ) -> list[dict]:
+        import asyncio
         results = []
         for i, t in enumerate(threats):
             if i > 0:
@@ -166,120 +107,174 @@ Metadata: {json.dumps(threat.metadata, indent=2)}"""
             results.append(await self.analyze_threat(t))
         return results
 
-    async def generate_report(self, threats: list) -> str:
-        prompt = f"""Write a concise executive security incident report for these {len(threats)} threats:
-{json.dumps(threats[:30], indent=2)}
-Include: Executive summary, timeline, impact, actions taken, recommendations."""
+    async def generate_report(self, threats: list[Any]) -> str:
+        threat_list = [
+            t.to_dict() if hasattr(t, "to_dict") else dict(t)
+            for t in threats[:40]
+        ]
+        prompt = (
+            f"Write a professional executive security incident report covering "
+            f"{len(threats)} detected threats.\n"
+            f"Threat data:\n{json.dumps(threat_list, indent=2)}\n\n"
+            f"Include: Executive summary, timeline, key findings, "
+            f"impact assessment, actions taken, and security recommendations."
+        )
         try:
-            return await self._complete(prompt,
-                system="You are a professional security report writer. Be concise and structured.",
-                max_tokens=1500)
-        except Exception as e:
-            logger.error(f"Report generation failed: {e}")
-            return f"Report generation failed: {e}"
+            return await self._complete(
+                prompt,
+                system=(
+                    "You are a professional cybersecurity report writer. "
+                    "Be concise, accurate, and use clear section headings. "
+                    "Do NOT fabricate data beyond what is provided."
+                ),
+                max_tokens=2000,
+            )
+        except Exception as exc:
+            logger.error("Report generation failed: %s", exc)
+            return f"Report generation failed: {exc}"
 
-    async def generate_pdf_report(self, threats: list) -> bytes:
-        """Generate PDF report — tries weasyprint, falls back to reportlab."""
+    async def generate_pdf_report(self, threats: list[Any]) -> bytes:
+        """Generate a PDF report. Falls back from weasyprint → reportlab → HTML bytes."""
         from datetime import datetime
         report_text = await self.generate_report(threats)
-        now_str  = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        critical = sum(1 for t in threats if str(t.get("severity","")).lower() == "critical")
-        high     = sum(1 for t in threats if str(t.get("severity","")).lower() == "high")
+        now_str     = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        threat_dicts = [
+            t.to_dict() if hasattr(t, "to_dict") else dict(t)
+            for t in threats
+        ]
+        critical = sum(1 for t in threat_dicts if str(t.get("severity", "")).lower() == "critical")
+        high     = sum(1 for t in threat_dicts if str(t.get("severity", "")).lower() == "high")
 
         try:
             import weasyprint
-            html = _build_report_html(report_text, threats, now_str, critical, high)
-            pdf = weasyprint.HTML(string=html).write_pdf()
-            logger.info(f"PDF via weasyprint: {len(pdf)} bytes")
+            html = _build_report_html(report_text, threat_dicts, now_str, critical, high)
+            pdf  = weasyprint.HTML(string=html).write_pdf()
+            logger.info("PDF via weasyprint: %d bytes", len(pdf))
             return pdf
-        except Exception as we:
-            logger.warning(f"weasyprint unavailable ({type(we).__name__}) — using reportlab")
+        except Exception as e:
+            logger.warning("weasyprint unavailable (%s) — trying reportlab", type(e).__name__)
 
-        return _build_report_reportlab(report_text, threats, now_str, critical, high)
+        return _build_report_reportlab(report_text, threat_dicts, now_str, critical, high)
 
 
-# ── Report rendering helpers ──────────────────────────────────────────
+# ── Report HTML builder ───────────────────────────────────────────────────
 
-def _build_report_html(body, threats, now_str, critical, high):
+def _build_report_html(
+    body: str,
+    threats: list[dict],
+    now_str: str,
+    critical: int,
+    high: int,
+) -> str:
     rows = "".join(
-        f"<tr><td>{t.get('id','')[:8]}</td><td>{t.get('type','')}</td>"
-        f"<td>{str(t.get('severity','')).upper()}</td>"
-        f"<td>{t.get('source','')[:30]}</td><td>{t.get('status','')}</td></tr>"
+        f"<tr><td>{t.get('id', '')[:8]}</td><td>{t.get('type', '')}</td>"
+        f"<td>{str(t.get('severity', '')).upper()}</td>"
+        f"<td>{str(t.get('source', ''))[:30]}</td><td>{t.get('status', '')}</td></tr>"
         for t in threats[:50]
     )
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>body{{font-family:Arial;margin:40px;color:#1a1a2e}}
+<style>
+body{{font-family:Arial,sans-serif;margin:40px;color:#1a1a2e;line-height:1.6}}
 .hdr{{background:#16213e;color:white;padding:25px;border-radius:8px;margin-bottom:25px}}
 .hdr h1{{margin:0;font-size:22px}}.hdr p{{margin:4px 0 0;opacity:.8;font-size:13px}}
-.body{{white-space:pre-wrap;line-height:1.6;font-size:14px}}
+.body{{white-space:pre-wrap;font-size:14px}}
 table{{width:100%;border-collapse:collapse;margin-top:16px}}
 th{{background:#16213e;color:white;padding:8px;text-align:left;font-size:12px}}
 td{{padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px}}
 </style></head><body>
-<div class="hdr"><h1>&#128737; AISS Security Incident Report</h1>
-<p>{now_str} | Threats: {len(threats)} | Critical: {critical} | High: {high}</p></div>
-<h2>Executive Summary</h2><div class="body">{body}</div>
+<div class="hdr">
+  <h1>&#128737; AISS Security Incident Report</h1>
+  <p>{now_str} &nbsp;|&nbsp; Threats: {len(threats)} &nbsp;|&nbsp;
+     Critical: {critical} &nbsp;|&nbsp; High: {high}</p>
+</div>
+<h2>Executive Summary</h2>
+<div class="body">{body}</div>
 <h2>Threat Details</h2>
-<table><tr><th>ID</th><th>Type</th><th>Severity</th><th>Source</th><th>Status</th></tr>
-{rows}</table>
+<table>
+  <tr><th>ID</th><th>Type</th><th>Severity</th><th>Source</th><th>Status</th></tr>
+  {rows}
+</table>
 <p style="text-align:center;color:#9ca3af;font-size:11px;margin-top:30px">
-AISS AI Security Intelligence System — Confidential</p>
+AISS AI Security Intelligence System &mdash; Confidential</p>
 </body></html>"""
 
 
-def _build_report_reportlab(body, threats, now_str, critical, high):
+# ── Report reportlab builder ──────────────────────────────────────────────
+
+def _build_report_reportlab(
+    body: str,
+    threats: list[dict],
+    now_str: str,
+    critical: int,
+    high: int,
+) -> bytes:
     try:
         from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.styles import getSampleStyleSheet
         from reportlab.lib.units import cm
         from reportlab.lib import colors
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.platypus import (
+            SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+        )
         import io
 
-        buf  = io.BytesIO()
-        doc  = SimpleDocTemplate(buf, pagesize=A4,
-                                 leftMargin=2*cm, rightMargin=2*cm,
-                                 topMargin=2*cm,  bottomMargin=2*cm)
-        s    = getSampleStyleSheet()
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buf, pagesize=A4,
+            leftMargin=2*cm, rightMargin=2*cm,
+            topMargin=2*cm, bottomMargin=2*cm,
+        )
+        s     = getSampleStyleSheet()
         story = []
 
-        story.append(Paragraph("AISS — Security Incident Report",
-            ParagraphStyle("T", parent=s["Title"],
-                           textColor=colors.HexColor("#16213e"), fontSize=18)))
-        story.append(Spacer(1, .3*cm))
+        story.append(Paragraph("AISS — Security Incident Report", s["Title"]))
+        story.append(Spacer(1, 0.3*cm))
         story.append(Paragraph(
-            f"Generated: {now_str} | Threats: {len(threats)} | Critical: {critical} | High: {high}",
-            s["Normal"]))
-        story.append(Spacer(1, .4*cm))
+            f"Generated: {now_str} | Threats: {len(threats)} | "
+            f"Critical: {critical} | High: {high}",
+            s["Normal"],
+        ))
+        story.append(Spacer(1, 0.4*cm))
         story.append(Paragraph("Executive Summary", s["Heading2"]))
+
         for para in body.split("\n\n"):
             if para.strip():
-                safe = para.replace("&","&amp;").replace("<","&lt;").replace("\n","<br/>")
+                safe = (
+                    para.replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace("\n", "<br/>")
+                )
                 story.append(Paragraph(safe, s["Normal"]))
-                story.append(Spacer(1, .15*cm))
+                story.append(Spacer(1, 0.15*cm))
 
-        story.append(Spacer(1, .4*cm))
+        story.append(Spacer(1, 0.4*cm))
         story.append(Paragraph("Threat Details", s["Heading2"]))
-        rows = [["ID","Type","Severity","Source","Status"]] + [
-            [t.get("id","")[:8], str(t.get("type",""))[:24],
-             str(t.get("severity","")).upper(), str(t.get("source",""))[:24],
-             str(t.get("status",""))]
+
+        rows = [["ID", "Type", "Severity", "Source", "Status"]] + [
+            [
+                str(t.get("id", ""))[:8],
+                str(t.get("type", ""))[:24],
+                str(t.get("severity", "")).upper(),
+                str(t.get("source", ""))[:24],
+                str(t.get("status", "")),
+            ]
             for t in threats[:50]
         ]
         tbl = Table(rows, repeatRows=1)
         tbl.setStyle(TableStyle([
-            ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#16213e")),
-            ("TEXTCOLOR",(0,0),(-1,0),colors.white),
-            ("FONTSIZE",(0,0),(-1,-1),8),
-            ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#f8f9fa")]),
-            ("GRID",(0,0),(-1,-1),.5,colors.HexColor("#e5e7eb")),
-            ("PADDING",(0,0),(-1,-1),4),
+            ("BACKGROUND",   (0, 0), (-1, 0),  colors.HexColor("#16213e")),
+            ("TEXTCOLOR",    (0, 0), (-1, 0),  colors.white),
+            ("FONTSIZE",     (0, 0), (-1, -1), 8),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8f9fa")]),
+            ("GRID",         (0, 0), (-1, -1), 0.5, colors.HexColor("#e5e7eb")),
+            ("PADDING",      (0, 0), (-1, -1), 4),
         ]))
         story.append(tbl)
         doc.build(story)
         pdf = buf.getvalue()
-        logger.info(f"PDF via reportlab: {len(pdf)} bytes")
+        logger.info("PDF via reportlab: %d bytes", len(pdf))
         return pdf
-    except Exception as e:
-        logger.error(f"reportlab failed: {e} — returning HTML bytes")
+
+    except Exception as exc:
+        logger.error("reportlab failed: %s — returning HTML bytes", exc)
         return _build_report_html(body, threats, now_str, critical, high).encode("utf-8")

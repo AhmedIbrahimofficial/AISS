@@ -197,20 +197,25 @@ class LLMAnalysisRequest(BaseModel):
 async def llm_analyze(req: LLMAnalysisRequest,
                       engine: ThreatEngine = Depends(get_engine_authenticated)):
     """
-    Run a threat through the LLM router (best available provider with fallback).
-    More reliable than the direct AIAnalyst when multiple providers are configured.
+    AI threat analysis via OpenRouter (OPENROUTER_API_KEY required).
     """
     from modules.llm_router import llm_router
     if not llm_router.is_available():
-        raise HTTPException(status_code=503, detail="No LLM providers configured")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "OPENROUTER_API_KEY is not configured. "
+                "Add your key to .env: https://openrouter.ai/keys"
+            ),
+        )
 
     system = (
-        "You are AISS's AI Security Analyst. Respond ONLY with valid JSON with: "
+        "You are AISS's AI Security Analyst. Respond ONLY with valid JSON with keys: "
         "threat_assessment, risk_level, attack_vector, immediate_actions, "
         "mitre_tactics, indicators_of_compromise, recommended_response."
     )
     result = await llm_router.complete_json(req.text, system=system)
-    return {"analysis": result, "providers": llm_router.available_providers()}
+    return {"analysis": result, "provider": "openrouter"}
 
 
 # ── Online Anomaly Scoring ────────────────────────────────────────────

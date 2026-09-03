@@ -4,6 +4,7 @@ Use these with FastAPI's Depends() instead of global set_engine() calls.
 """
 
 from fastapi import Depends, HTTPException, status
+from typing import TYPE_CHECKING
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth import get_current_user
@@ -11,9 +12,15 @@ from core.database import get_db
 from core.threat_engine import ThreatEngine
 from core.websocket_manager import WebSocketManager
 
+if TYPE_CHECKING:
+    from agents.orchestrator import AgentOrchestrator
+    from agents.scheduler import SchedulerEngine
+
 # ── Singleton instances (set once in main.py lifespan) ───────────────
 _threat_engine: ThreatEngine | None = None
 _ws_manager: WebSocketManager | None = None
+_orchestrator: "AgentOrchestrator | None" = None
+_scheduler: "SchedulerEngine | None" = None
 
 
 def init_services(engine: ThreatEngine, ws_manager: WebSocketManager):
@@ -21,6 +28,13 @@ def init_services(engine: ThreatEngine, ws_manager: WebSocketManager):
     global _threat_engine, _ws_manager
     _threat_engine = engine
     _ws_manager = ws_manager
+
+
+def init_agent_services(orchestrator: "AgentOrchestrator", scheduler: "SchedulerEngine") -> None:
+    """Called once during app startup to register agent singletons."""
+    global _orchestrator, _scheduler
+    _orchestrator = orchestrator
+    _scheduler = scheduler
 
 
 # ── Engine dependency ─────────────────────────────────────────────────
@@ -43,6 +57,25 @@ def get_ws_manager() -> WebSocketManager:
     return _ws_manager
 
 
+# ── Agent orchestrator dependency ─────────────────────────────────────
+def get_orchestrator() -> "AgentOrchestrator":
+    if _orchestrator is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Agent orchestrator not initialized",
+        )
+    return _orchestrator
+
+
+def get_scheduler() -> "SchedulerEngine":
+    if _scheduler is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Scheduler not initialized",
+        )
+    return _scheduler
+
+
 # ── Authenticated engine — requires valid JWT ─────────────────────────
 def get_engine_authenticated(
     engine: ThreatEngine = Depends(get_engine),
@@ -56,11 +89,6 @@ def get_engine_authenticated(
 def require_role(*roles: str):
     """
     Dependency factory — restricts endpoint to specific roles.
-
-    Usage:
-        @router.delete("/clear")
-        async def clear(user=Depends(require_role("admin"))):
-            ...
     """
     def _check(user: dict = Depends(get_current_user)) -> dict:
         if user.get("role") not in roles:
@@ -73,5 +101,4 @@ def require_role(*roles: str):
 
 
 # ── DB session shorthand ──────────────────────────────────────────────
-# Re-export so routes only need to import from core.dependencies
 get_db_session = get_db

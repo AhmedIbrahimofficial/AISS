@@ -13,6 +13,8 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
@@ -31,6 +33,42 @@ from utils.logger import setup_logger
 
 logger = setup_logger("network_discovery.routes")
 router = APIRouter()
+
+
+def _detect_nmap() -> dict:
+    """
+    Detect nmap binary in PATH or common install locations.
+    Returns dict with 'available', 'path', and 'install_hint'.
+    """
+    # Check PATH first
+    nmap_path = shutil.which("nmap")
+    if nmap_path:
+        return {"available": True, "path": nmap_path, "install_hint": None}
+
+    # Common Windows install locations
+    common_paths = [
+        r"C:\Program Files (x86)\Nmap\nmap.exe",
+        r"C:\Program Files\Nmap\nmap.exe",
+        os.path.expanduser(r"~\AppData\Local\Nmap\nmap.exe"),
+    ]
+    for p in common_paths:
+        if os.path.isfile(p):
+            return {"available": True, "path": p, "install_hint": None}
+
+    return {
+        "available": False,
+        "path": None,
+        "install_hint": (
+            "Nmap not found. Install it from https://nmap.org/download.html "
+            "or run: winget install nmap"
+        ),
+    }
+
+
+@router.get("/nmap-status", summary="Check if nmap is installed")
+async def nmap_status():
+    """Return nmap availability and install instructions."""
+    return _detect_nmap()
 
 
 # ── POST /api/network-discovery/hosts ────────────────────────────────

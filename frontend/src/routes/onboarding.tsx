@@ -61,7 +61,7 @@ function AuthStep({ prefs, setPrefs, onNext }: any) {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
 
-  const BASE = (import.meta.env.VITE_AISS_API_URL as string) ?? "http://localhost:8000";
+  const BASE = (import.meta.env["VITE_AISS_API_URL"] as string) ?? "http://localhost:8000";
 
   const handleGoogleAuth = () => {
     window.location.href = `${BASE}/api/auth/oauth/google?redirect_uri=${encodeURIComponent(window.location.origin + "/onboarding?step=reports")}`;
@@ -369,22 +369,23 @@ function WelcomeStep({ prefs, navigate }: { prefs: any; navigate: any }) {
   const [ready, setReady]       = useState(false);
 
   useEffect(() => {
-    // Fake "analyzing your system" animation
-    let i = 0;
-    const t = setInterval(() => {
-      i += Math.floor(Math.random() * 7) + 1;
-      setCount(Math.min(i, 100));
-      if (i >= 100) { clearInterval(t); setReady(true); }
-    }, 40);
-    return () => clearInterval(t);
+    // Skip fake animation — go straight to ready
+    setCount(100);
+    setReady(true);
   }, []);
 
-  const handleStart = () => {
-    // Save onboarding done flag
+  const handleStart = async () => {
+    // Persist onboarding completion to the BACKEND database — not just localStorage
+    try {
+      const { completeOnboarding } = await import("@/lib/api");
+      await completeOnboarding(["welcome", "reports", "connect"]);
+    } catch {
+      // fallback — still let user in even if API call fails
+    }
     localStorage.setItem("aiss_onboarding_done", "1");
     localStorage.setItem("aiss_prefs", JSON.stringify(prefs));
     toast.success("AISS is now protecting your system!", { duration: 4000 });
-    void navigate({ to: "/" });
+    void navigate({ to: "/ai-console" });
   };
 
   return (

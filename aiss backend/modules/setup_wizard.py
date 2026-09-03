@@ -116,50 +116,37 @@ ALL_QUESTIONS: list[Question] = [
         icon="🗄️",
     ),
 
-    # ── Step 3: AI Providers ──────────────────────────────────────────
+    # ── Step 3: AI Provider (OpenRouter) ─────────────────────────────
     Question(
-        id="ANTHROPIC_API_KEY", step="3_ai",
-        title="Anthropic Claude",
-        label="Enter your Anthropic API key (for Claude AI analysis)",
+        id="OPENROUTER_API_KEY", step="3_ai",
+        title="OpenRouter API Key (Required for AI features)",
+        label="Enter your OpenRouter API key — this powers all AI in AISS",
         type="password",
-        placeholder="sk-ant-api03-...",
-        help_text="Get your key at https://console.anthropic.com/settings/keys",
-        help_url="https://console.anthropic.com/settings/keys",
+        placeholder="sk-or-v1-...",
+        required=True,
+        help_text=(
+            "OpenRouter gives you access to Claude, GPT-4, Gemini, Llama and more "
+            "through a single key with automatic fallback. "
+            "Get your free key at https://openrouter.ai/keys"
+        ),
+        help_url="https://openrouter.ai/keys",
         icon="🤖",
-        validation=r"^(sk-ant-|$)",
     ),
     Question(
-        id="OPENAI_API_KEY", step="3_ai",
-        title="OpenAI GPT",
-        label="Enter your OpenAI API key (for GPT-4 fallback)",
-        type="password",
-        placeholder="sk-proj-...",
-        help_text="Get your key at https://platform.openai.com/api-keys",
-        help_url="https://platform.openai.com/api-keys",
-        icon="🧠",
-    ),
-    Question(
-        id="GROQ_API_KEY", step="3_ai",
-        title="Groq (Ultra-fast AI)",
-        label="Enter your Groq API key for ultra-fast LLM inference (free tier available)",
-        type="password",
-        placeholder="gsk_...",
-        help_text="Free tier available at https://console.groq.com/keys",
-        help_url="https://console.groq.com/keys",
-        icon="⚡",
-    ),
-    Question(
-        id="OPENAI_MODEL", step="3_ai",
-        title="Default AI Model",
-        label="Which OpenAI model should AISS use?",
+        id="OPENROUTER_MODEL", step="3_ai",
+        title="Preferred AI Model",
+        label="Which model should AISS use by default? (Falls back automatically if unavailable)",
         type="select",
         options=[
-            {"value": "gpt-4o-mini", "label": "GPT-4o Mini — fast & cheap (recommended)"},
-            {"value": "gpt-4o",      "label": "GPT-4o — most capable"},
-            {"value": "gpt-4-turbo", "label": "GPT-4 Turbo"},
+            {"value": "anthropic/claude-3.5-sonnet", "label": "Claude 3.5 Sonnet — best reasoning (recommended)"},
+            {"value": "anthropic/claude-3-haiku",    "label": "Claude 3 Haiku — fast & cheap"},
+            {"value": "openai/gpt-4o",               "label": "GPT-4o — OpenAI flagship"},
+            {"value": "openai/gpt-4o-mini",          "label": "GPT-4o Mini — fast & economical"},
+            {"value": "google/gemini-pro-1.5",       "label": "Gemini Pro 1.5"},
+            {"value": "meta-llama/llama-3.1-70b-instruct", "label": "Llama 3.1 70B — open source"},
+            {"value": "deepseek/deepseek-chat",      "label": "DeepSeek Chat — cost-efficient"},
         ],
-        default="gpt-4o-mini",
-        depends_on="OPENAI_API_KEY",
+        default="anthropic/claude-3.5-sonnet",
         icon="⚙️",
     ),
 

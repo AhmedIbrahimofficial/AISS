@@ -86,10 +86,18 @@ async def register_user(data: RegisterRequest, db: AsyncSession) -> AuthUser:
     await db.refresh(user)
 
     # Send verification email (best-effort — don't fail registration)
-    try:
-        await send_verification_email(user.email, user.username, token)
-    except Exception as e:
-        logger.error(f"Verification email failed for {user.email}: {e}")
+    # When SMTP is not configured, auto-verify the account for dev convenience
+    from auth.utils.email import is_mail_configured
+    if not is_mail_configured():
+        user.is_verified = True
+        await db.commit()
+        await db.refresh(user)
+        logger.info(f"SMTP not configured — auto-verified user: {user.email}")
+    else:
+        try:
+            await send_verification_email(user.email, user.username, token)
+        except Exception as e:
+            logger.error(f"Verification email failed for {user.email}: {e}")
 
     logger.info(f"New user registered: {user.email}")
     return user
@@ -166,9 +174,10 @@ async def login_user(
 
     logger.info(f"Successful login: {user.email} from {ip}")
     return {
-        "access_token":  access_token,
-        "refresh_token": raw_refresh,
-        "expires_in":    ACCESS_TOKEN_EXPIRE_MIN * 60,
+        "access_token":        access_token,
+        "refresh_token":       raw_refresh,
+        "expires_in":          ACCESS_TOKEN_EXPIRE_MIN * 60,
+        "must_change_password": user.must_change_password,
     }
 
 
@@ -219,7 +228,7 @@ async def refresh_tokens(raw_token: str, request: Request, db: AsyncSession) -> 
         ip_address         = _client_ip(request),
         user_agent         = request.headers.get("User-Agent", ""),
         device_info        = session.device_info,
-        expires_at         = refresh_token_expiry(),
+        expires_at         = refresh_token_expiry(),  # sliding window — extends by 365 days
     )
     db.add(new_session)
     await db.commit()

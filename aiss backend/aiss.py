@@ -618,7 +618,7 @@ def setup_env():
         pass
 
     ok(".env created with all secure keys")
-    warn("Fill in API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) in .env for full AI features")
+    warn("Add OPENROUTER_API_KEY to .env to enable all AI features (https://openrouter.ai/keys)")
 
 
 def _generate_fernet_key() -> str:
@@ -641,8 +641,8 @@ def _write_minimal_env(path: Path):
         f"SECRET_KEY={sk}\n"
         f"ALLOWED_ORIGINS=http://localhost:3000\n"
         f"AISS_LICENSE_KEY=\n"
-        f"ANTHROPIC_API_KEY=\n"
-        f"OPENAI_API_KEY=\n"
+        f"OPENROUTER_API_KEY=\n"
+        f"OPENROUTER_MODEL=anthropic/claude-3.5-sonnet\n"
         f"LOG_FORMAT=text\n"
         f"LOG_LEVEL=INFO\n"
         f"DISABLE_TTS=1\n"
@@ -990,21 +990,16 @@ def run_cmd_setup_wizard():
          "sqlite+aiosqlite:///./logs/cybersecurity.db",
          False,
          "sqlite / mysql+aiomysql:// / postgresql+asyncpg://"),
-        ("ANTHROPIC_API_KEY",
-         "Anthropic API key (Claude AI)",
+        ("OPENROUTER_API_KEY",
+         "OpenRouter API key (powers ALL AI features)",
          "",
          True,
-         "sk-ant-... from console.anthropic.com"),
-        ("OPENAI_API_KEY",
-         "OpenAI API key (GPT-4)",
-         "",
-         True,
-         "sk-proj-... from platform.openai.com"),
-        ("GROQ_API_KEY",
-         "Groq API key (ultra-fast LLM, free tier)",
-         "",
-         True,
-         "gsk_... from console.groq.com"),
+         "sk-or-v1-... from openrouter.ai/keys — single key for Claude, GPT-4, Gemini, Llama"),
+        ("OPENROUTER_MODEL",
+         "Preferred AI model via OpenRouter",
+         "anthropic/claude-3.5-sonnet",
+         False,
+         "anthropic/claude-3.5-sonnet | openai/gpt-4o | openai/gpt-4o-mini | google/gemini-pro-1.5"),
         ("VIRUSTOTAL_API_KEY",
          "VirusTotal API key",
          "",

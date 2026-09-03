@@ -10,12 +10,15 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AgentRouteImport } from './routes/agent'
 import { Route as AiAssistantRouteImport } from './routes/ai-assistant'
+import { Route as AiConsoleRouteImport } from './routes/ai-console'
 import { Route as ApiManagementRouteImport } from './routes/api-management'
 import { Route as AssetsRouteImport } from './routes/assets'
 import { Route as AttackSurfaceRouteImport } from './routes/attack-surface'
 import { Route as AuditLogsRouteImport } from './routes/audit-logs'
 import { Route as AutomationRouteImport } from './routes/automation'
+import { Route as ChangePasswordRouteImport } from './routes/change-password'
 import { Route as CloudSecurityRouteImport } from './routes/cloud-security'
 import { Route as ComplianceRouteImport } from './routes/compliance'
 import { Route as EndpointsRouteImport } from './routes/endpoints'
@@ -25,6 +28,7 @@ import { Route as IdentityProtectionRouteImport } from './routes/identity-protec
 import { Route as IdsIpsRouteImport } from './routes/ids-ips'
 import { Route as IncidentResponseRouteImport } from './routes/incident-response'
 import { Route as IncidentsRouteImport } from './routes/incidents'
+import { Route as JobsRouteImport } from './routes/jobs'
 import { Route as LicenseRouteImport } from './routes/license'
 import { Route as LiveMonitoringRouteImport } from './routes/live-monitoring'
 import { Route as LoginRouteImport } from './routes/login'
@@ -32,12 +36,15 @@ import { Route as LogsRouteImport } from './routes/logs'
 import { Route as MalwareAnalysisRouteImport } from './routes/malware-analysis'
 import { Route as NetworkRouteImport } from './routes/network'
 import { Route as NetworkMonitorRouteImport } from './routes/network-monitor'
+import { Route as OauthCallbackRouteImport } from './routes/oauth-callback'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as PlaybooksRouteImport } from './routes/playbooks'
 import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as SandboxRouteImport } from './routes/sandbox'
+import { Route as SecurityGatewayRouteImport } from './routes/security-gateway'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SiemRouteImport } from './routes/siem'
+import { Route as SignupRouteImport } from './routes/signup'
 import { Route as SystemHealthRouteImport } from './routes/system-health'
 import { Route as ThreatCenterRouteImport } from './routes/threat-center'
 import { Route as ThreatIntelligenceRouteImport } from './routes/threat-intelligence'
@@ -54,9 +61,19 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AgentRoute = AgentRouteImport.update({
+  id: '/agent',
+  path: '/agent',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AiAssistantRoute = AiAssistantRouteImport.update({
   id: '/ai-assistant',
   path: '/ai-assistant',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AiConsoleRoute = AiConsoleRouteImport.update({
+  id: '/ai-console',
+  path: '/ai-console',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiManagementRoute = ApiManagementRouteImport.update({
@@ -82,6 +99,11 @@ const AuditLogsRoute = AuditLogsRouteImport.update({
 const AutomationRoute = AutomationRouteImport.update({
   id: '/automation',
   path: '/automation',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ChangePasswordRoute = ChangePasswordRouteImport.update({
+  id: '/change-password',
+  path: '/change-password',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CloudSecurityRoute = CloudSecurityRouteImport.update({
@@ -129,6 +151,11 @@ const IncidentsRoute = IncidentsRouteImport.update({
   path: '/incidents',
   getParentRoute: () => rootRouteImport,
 } as any)
+const JobsRoute = JobsRouteImport.update({
+  id: '/jobs',
+  path: '/jobs',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LicenseRoute = LicenseRouteImport.update({
   id: '/license',
   path: '/license',
@@ -164,6 +191,11 @@ const NetworkMonitorRoute = NetworkMonitorRouteImport.update({
   path: '/network-monitor',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OauthCallbackRoute = OauthCallbackRouteImport.update({
+  id: '/oauth-callback',
+  path: '/oauth-callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OnboardingRoute = OnboardingRouteImport.update({
   id: '/onboarding',
   path: '/onboarding',
@@ -184,6 +216,11 @@ const SandboxRoute = SandboxRouteImport.update({
   path: '/sandbox',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SecurityGatewayRoute = SecurityGatewayRouteImport.update({
+  id: '/security-gateway',
+  path: '/security-gateway',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -192,6 +229,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const SiemRoute = SiemRouteImport.update({
   id: '/siem',
   path: '/siem',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SignupRoute = SignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SystemHealthRoute = SystemHealthRouteImport.update({
@@ -247,12 +289,15 @@ const InvestigateTypeIdRoute = InvestigateTypeIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/agent': typeof AgentRoute
   '/ai-assistant': typeof AiAssistantRoute
+  '/ai-console': typeof AiConsoleRoute
   '/api-management': typeof ApiManagementRoute
   '/assets': typeof AssetsRoute
   '/attack-surface': typeof AttackSurfaceRoute
   '/audit-logs': typeof AuditLogsRoute
   '/automation': typeof AutomationRoute
+  '/change-password': typeof ChangePasswordRoute
   '/cloud-security': typeof CloudSecurityRoute
   '/compliance': typeof ComplianceRoute
   '/endpoints': typeof EndpointsRoute
@@ -262,6 +307,7 @@ export interface FileRoutesByFullPath {
   '/ids-ips': typeof IdsIpsRoute
   '/incident-response': typeof IncidentResponseRoute
   '/incidents': typeof IncidentsRoute
+  '/jobs': typeof JobsRoute
   '/license': typeof LicenseRoute
   '/live-monitoring': typeof LiveMonitoringRoute
   '/login': typeof LoginRoute
@@ -269,12 +315,15 @@ export interface FileRoutesByFullPath {
   '/malware-analysis': typeof MalwareAnalysisRoute
   '/network': typeof NetworkRoute
   '/network-monitor': typeof NetworkMonitorRoute
+  '/oauth-callback': typeof OauthCallbackRoute
   '/onboarding': typeof OnboardingRoute
   '/playbooks': typeof PlaybooksRoute
   '/reports': typeof ReportsRoute
   '/sandbox': typeof SandboxRoute
+  '/security-gateway': typeof SecurityGatewayRoute
   '/settings': typeof SettingsRoute
   '/siem': typeof SiemRoute
+  '/signup': typeof SignupRoute
   '/system-health': typeof SystemHealthRoute
   '/threat-center': typeof ThreatCenterRoute
   '/threat-intelligence': typeof ThreatIntelligenceRoute
@@ -288,12 +337,15 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/agent': typeof AgentRoute
   '/ai-assistant': typeof AiAssistantRoute
+  '/ai-console': typeof AiConsoleRoute
   '/api-management': typeof ApiManagementRoute
   '/assets': typeof AssetsRoute
   '/attack-surface': typeof AttackSurfaceRoute
   '/audit-logs': typeof AuditLogsRoute
   '/automation': typeof AutomationRoute
+  '/change-password': typeof ChangePasswordRoute
   '/cloud-security': typeof CloudSecurityRoute
   '/compliance': typeof ComplianceRoute
   '/endpoints': typeof EndpointsRoute
@@ -303,6 +355,7 @@ export interface FileRoutesByTo {
   '/ids-ips': typeof IdsIpsRoute
   '/incident-response': typeof IncidentResponseRoute
   '/incidents': typeof IncidentsRoute
+  '/jobs': typeof JobsRoute
   '/license': typeof LicenseRoute
   '/live-monitoring': typeof LiveMonitoringRoute
   '/login': typeof LoginRoute
@@ -310,12 +363,15 @@ export interface FileRoutesByTo {
   '/malware-analysis': typeof MalwareAnalysisRoute
   '/network': typeof NetworkRoute
   '/network-monitor': typeof NetworkMonitorRoute
+  '/oauth-callback': typeof OauthCallbackRoute
   '/onboarding': typeof OnboardingRoute
   '/playbooks': typeof PlaybooksRoute
   '/reports': typeof ReportsRoute
   '/sandbox': typeof SandboxRoute
+  '/security-gateway': typeof SecurityGatewayRoute
   '/settings': typeof SettingsRoute
   '/siem': typeof SiemRoute
+  '/signup': typeof SignupRoute
   '/system-health': typeof SystemHealthRoute
   '/threat-center': typeof ThreatCenterRoute
   '/threat-intelligence': typeof ThreatIntelligenceRoute
@@ -330,12 +386,15 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/agent': typeof AgentRoute
   '/ai-assistant': typeof AiAssistantRoute
+  '/ai-console': typeof AiConsoleRoute
   '/api-management': typeof ApiManagementRoute
   '/assets': typeof AssetsRoute
   '/attack-surface': typeof AttackSurfaceRoute
   '/audit-logs': typeof AuditLogsRoute
   '/automation': typeof AutomationRoute
+  '/change-password': typeof ChangePasswordRoute
   '/cloud-security': typeof CloudSecurityRoute
   '/compliance': typeof ComplianceRoute
   '/endpoints': typeof EndpointsRoute
@@ -345,6 +404,7 @@ export interface FileRoutesById {
   '/ids-ips': typeof IdsIpsRoute
   '/incident-response': typeof IncidentResponseRoute
   '/incidents': typeof IncidentsRoute
+  '/jobs': typeof JobsRoute
   '/license': typeof LicenseRoute
   '/live-monitoring': typeof LiveMonitoringRoute
   '/login': typeof LoginRoute
@@ -352,12 +412,15 @@ export interface FileRoutesById {
   '/malware-analysis': typeof MalwareAnalysisRoute
   '/network': typeof NetworkRoute
   '/network-monitor': typeof NetworkMonitorRoute
+  '/oauth-callback': typeof OauthCallbackRoute
   '/onboarding': typeof OnboardingRoute
   '/playbooks': typeof PlaybooksRoute
   '/reports': typeof ReportsRoute
   '/sandbox': typeof SandboxRoute
+  '/security-gateway': typeof SecurityGatewayRoute
   '/settings': typeof SettingsRoute
   '/siem': typeof SiemRoute
+  '/signup': typeof SignupRoute
   '/system-health': typeof SystemHealthRoute
   '/threat-center': typeof ThreatCenterRoute
   '/threat-intelligence': typeof ThreatIntelligenceRoute
@@ -373,12 +436,15 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/agent'
     | '/ai-assistant'
+    | '/ai-console'
     | '/api-management'
     | '/assets'
     | '/attack-surface'
     | '/audit-logs'
     | '/automation'
+    | '/change-password'
     | '/cloud-security'
     | '/compliance'
     | '/endpoints'
@@ -388,6 +454,7 @@ export interface FileRouteTypes {
     | '/ids-ips'
     | '/incident-response'
     | '/incidents'
+    | '/jobs'
     | '/license'
     | '/live-monitoring'
     | '/login'
@@ -395,12 +462,15 @@ export interface FileRouteTypes {
     | '/malware-analysis'
     | '/network'
     | '/network-monitor'
+    | '/oauth-callback'
     | '/onboarding'
     | '/playbooks'
     | '/reports'
     | '/sandbox'
+    | '/security-gateway'
     | '/settings'
     | '/siem'
+    | '/signup'
     | '/system-health'
     | '/threat-center'
     | '/threat-intelligence'
@@ -414,12 +484,15 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/agent'
     | '/ai-assistant'
+    | '/ai-console'
     | '/api-management'
     | '/assets'
     | '/attack-surface'
     | '/audit-logs'
     | '/automation'
+    | '/change-password'
     | '/cloud-security'
     | '/compliance'
     | '/endpoints'
@@ -429,6 +502,7 @@ export interface FileRouteTypes {
     | '/ids-ips'
     | '/incident-response'
     | '/incidents'
+    | '/jobs'
     | '/license'
     | '/live-monitoring'
     | '/login'
@@ -436,12 +510,15 @@ export interface FileRouteTypes {
     | '/malware-analysis'
     | '/network'
     | '/network-monitor'
+    | '/oauth-callback'
     | '/onboarding'
     | '/playbooks'
     | '/reports'
     | '/sandbox'
+    | '/security-gateway'
     | '/settings'
     | '/siem'
+    | '/signup'
     | '/system-health'
     | '/threat-center'
     | '/threat-intelligence'
@@ -455,12 +532,15 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/agent'
     | '/ai-assistant'
+    | '/ai-console'
     | '/api-management'
     | '/assets'
     | '/attack-surface'
     | '/audit-logs'
     | '/automation'
+    | '/change-password'
     | '/cloud-security'
     | '/compliance'
     | '/endpoints'
@@ -470,6 +550,7 @@ export interface FileRouteTypes {
     | '/ids-ips'
     | '/incident-response'
     | '/incidents'
+    | '/jobs'
     | '/license'
     | '/live-monitoring'
     | '/login'
@@ -477,12 +558,15 @@ export interface FileRouteTypes {
     | '/malware-analysis'
     | '/network'
     | '/network-monitor'
+    | '/oauth-callback'
     | '/onboarding'
     | '/playbooks'
     | '/reports'
     | '/sandbox'
+    | '/security-gateway'
     | '/settings'
     | '/siem'
+    | '/signup'
     | '/system-health'
     | '/threat-center'
     | '/threat-intelligence'
@@ -497,12 +581,15 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AgentRoute: typeof AgentRoute
   AiAssistantRoute: typeof AiAssistantRoute
+  AiConsoleRoute: typeof AiConsoleRoute
   ApiManagementRoute: typeof ApiManagementRoute
   AssetsRoute: typeof AssetsRoute
   AttackSurfaceRoute: typeof AttackSurfaceRoute
   AuditLogsRoute: typeof AuditLogsRoute
   AutomationRoute: typeof AutomationRoute
+  ChangePasswordRoute: typeof ChangePasswordRoute
   CloudSecurityRoute: typeof CloudSecurityRoute
   ComplianceRoute: typeof ComplianceRoute
   EndpointsRoute: typeof EndpointsRoute
@@ -512,6 +599,7 @@ export interface RootRouteChildren {
   IdsIpsRoute: typeof IdsIpsRoute
   IncidentResponseRoute: typeof IncidentResponseRoute
   IncidentsRoute: typeof IncidentsRoute
+  JobsRoute: typeof JobsRoute
   LicenseRoute: typeof LicenseRoute
   LiveMonitoringRoute: typeof LiveMonitoringRoute
   LoginRoute: typeof LoginRoute
@@ -519,12 +607,15 @@ export interface RootRouteChildren {
   MalwareAnalysisRoute: typeof MalwareAnalysisRoute
   NetworkRoute: typeof NetworkRoute
   NetworkMonitorRoute: typeof NetworkMonitorRoute
+  OauthCallbackRoute: typeof OauthCallbackRoute
   OnboardingRoute: typeof OnboardingRoute
   PlaybooksRoute: typeof PlaybooksRoute
   ReportsRoute: typeof ReportsRoute
   SandboxRoute: typeof SandboxRoute
+  SecurityGatewayRoute: typeof SecurityGatewayRoute
   SettingsRoute: typeof SettingsRoute
   SiemRoute: typeof SiemRoute
+  SignupRoute: typeof SignupRoute
   SystemHealthRoute: typeof SystemHealthRoute
   ThreatCenterRoute: typeof ThreatCenterRoute
   ThreatIntelligenceRoute: typeof ThreatIntelligenceRoute
@@ -546,11 +637,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/agent': {
+      id: '/agent'
+      path: '/agent'
+      fullPath: '/agent'
+      preLoaderRoute: typeof AgentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ai-assistant': {
       id: '/ai-assistant'
       path: '/ai-assistant'
       fullPath: '/ai-assistant'
       preLoaderRoute: typeof AiAssistantRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ai-console': {
+      id: '/ai-console'
+      path: '/ai-console'
+      fullPath: '/ai-console'
+      preLoaderRoute: typeof AiConsoleRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api-management': {
@@ -586,6 +691,13 @@ declare module '@tanstack/react-router' {
       path: '/automation'
       fullPath: '/automation'
       preLoaderRoute: typeof AutomationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/change-password': {
+      id: '/change-password'
+      path: '/change-password'
+      fullPath: '/change-password'
+      preLoaderRoute: typeof ChangePasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/cloud-security': {
@@ -651,6 +763,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IncidentsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/jobs': {
+      id: '/jobs'
+      path: '/jobs'
+      fullPath: '/jobs'
+      preLoaderRoute: typeof JobsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/license': {
       id: '/license'
       path: '/license'
@@ -700,6 +819,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof NetworkMonitorRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/oauth-callback': {
+      id: '/oauth-callback'
+      path: '/oauth-callback'
+      fullPath: '/oauth-callback'
+      preLoaderRoute: typeof OauthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/onboarding': {
       id: '/onboarding'
       path: '/onboarding'
@@ -728,6 +854,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SandboxRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/security-gateway': {
+      id: '/security-gateway'
+      path: '/security-gateway'
+      fullPath: '/security-gateway'
+      preLoaderRoute: typeof SecurityGatewayRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -740,6 +873,13 @@ declare module '@tanstack/react-router' {
       path: '/siem'
       fullPath: '/siem'
       preLoaderRoute: typeof SiemRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/signup': {
+      id: '/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/system-health': {
@@ -817,12 +957,15 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AgentRoute: AgentRoute,
   AiAssistantRoute: AiAssistantRoute,
+  AiConsoleRoute: AiConsoleRoute,
   ApiManagementRoute: ApiManagementRoute,
   AssetsRoute: AssetsRoute,
   AttackSurfaceRoute: AttackSurfaceRoute,
   AuditLogsRoute: AuditLogsRoute,
   AutomationRoute: AutomationRoute,
+  ChangePasswordRoute: ChangePasswordRoute,
   CloudSecurityRoute: CloudSecurityRoute,
   ComplianceRoute: ComplianceRoute,
   EndpointsRoute: EndpointsRoute,
@@ -832,6 +975,7 @@ const rootRouteChildren: RootRouteChildren = {
   IdsIpsRoute: IdsIpsRoute,
   IncidentResponseRoute: IncidentResponseRoute,
   IncidentsRoute: IncidentsRoute,
+  JobsRoute: JobsRoute,
   LicenseRoute: LicenseRoute,
   LiveMonitoringRoute: LiveMonitoringRoute,
   LoginRoute: LoginRoute,
@@ -839,12 +983,15 @@ const rootRouteChildren: RootRouteChildren = {
   MalwareAnalysisRoute: MalwareAnalysisRoute,
   NetworkRoute: NetworkRoute,
   NetworkMonitorRoute: NetworkMonitorRoute,
+  OauthCallbackRoute: OauthCallbackRoute,
   OnboardingRoute: OnboardingRoute,
   PlaybooksRoute: PlaybooksRoute,
   ReportsRoute: ReportsRoute,
   SandboxRoute: SandboxRoute,
+  SecurityGatewayRoute: SecurityGatewayRoute,
   SettingsRoute: SettingsRoute,
   SiemRoute: SiemRoute,
+  SignupRoute: SignupRoute,
   SystemHealthRoute: SystemHealthRoute,
   ThreatCenterRoute: ThreatCenterRoute,
   ThreatIntelligenceRoute: ThreatIntelligenceRoute,
