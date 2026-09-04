@@ -148,12 +148,22 @@ class ThreatEngine:
     # ══════════════════════════════════════════════════════════════════
 
     async def start_monitoring(self) -> None:
-        """Start the main monitoring loop."""
+        """Start the main monitoring loop in a dedicated thread pool executor.
+
+        Running the monitor loop in run_in_executor means the heavy scan work
+        happens in a separate OS thread — the asyncio event loop stays completely
+        free to serve HTTP requests and WebSocket messages even during active scans.
+        """
         if self.monitoring:
             return
         self.monitoring = True
         logger.info("🛡️ AISS monitoring STARTED")
-        self._monitor_task = asyncio.create_task(self._monitor_loop())
+
+        # Launch the blocking monitor loop in a thread so the event loop
+        # is never held by scan CPU work
+        loop = asyncio.get_event_loop()
+        self._monitor_task = loop.run_in_executor(None, self._monitor_loop_sync)
+
         await self.ws_manager.broadcast({
             "event":     "monitoring_started",
             "timestamp": datetime.utcnow().isoformat(),
@@ -163,25 +173,32 @@ class ThreatEngine:
     async def stop_monitoring(self) -> None:
         """Stop the main monitoring loop."""
         self.monitoring = False
-        if self._monitor_task:
-            self._monitor_task.cancel()
         logger.info("🔴 AISS monitoring STOPPED")
         await self.ws_manager.broadcast({
             "event":     "monitoring_stopped",
             "timestamp": datetime.utcnow().isoformat(),
         })
 
-    async def _monitor_loop(self) -> None:
-        """Main monitoring loop — polls all detection modules every 5 seconds.
-
-        Each monitor runs in its own concurrent task so a slow or blocking
-        scan cannot stall the others. A per-monitor timeout prevents any single
-        monitor from hanging the loop indefinitely.
+    def _monitor_loop_sync(self) -> None:
         """
-        from modules.network_monitor import NetworkMonitor
-        from modules.auth_monitor   import AuthMonitor
-        from modules.file_monitor   import FileMonitor
-        from modules.malware_scanner import MalwareScanner
+        Synchronous monitoring loop — runs in a dedicated thread via run_in_executor.
+
+        Each scan cycle:
+          1. Creates a fresh event loop for this thread
+          2. Runs all 4 monitors concurrently with a per-monitor timeout
+          3. Sleeps 30 seconds before the next cycle
+          4. Exits cleanly when self.monitoring is set to False
+
+        Because this runs in its own thread with its own event loop, it never
+        competes with the main uvicorn event loop that serves HTTP requests.
+        """
+        import threading
+        import asyncio as _asyncio
+
+        from modules.network_monitor  import NetworkMonitor
+        from modules.auth_monitor     import AuthMonitor
+        from modules.file_monitor     import FileMonitor
+        from modules.malware_scanner  import MalwareScanner
 
         monitors = [
             NetworkMonitor(self),
@@ -190,25 +207,42 @@ class ThreatEngine:
             MalwareScanner(self),
         ]
 
+        # Each iteration runs in its own fresh event loop in this thread
         while self.monitoring:
-            async def _run_one(monitor) -> None:
-                name = monitor.__class__.__name__
-                _t0 = time.time()
-                try:
-                    await asyncio.wait_for(monitor.scan(), timeout=25.0)
-                except asyncio.TimeoutError:
-                    logger.warning(f"Monitor timeout [{name}]: scan exceeded 25s")
-                except Exception as e:
-                    logger.error(f"Monitor error [{name}]: {e}")
-                finally:
-                    try:
-                        from core.metrics import observe_scan
-                        observe_scan(name.lower(), time.time() - _t0)
-                    except Exception:
-                        pass
+            loop = _asyncio.new_event_loop()
+            _asyncio.set_event_loop(loop)
+            try:
+                async def _run_all():
+                    async def _run_one(monitor):
+                        name = monitor.__class__.__name__
+                        _t0 = time.time()
+                        try:
+                            await _asyncio.wait_for(monitor.scan(), timeout=20.0)
+                        except _asyncio.TimeoutError:
+                            logger.warning(f"Monitor timeout [{name}]: scan exceeded 20s")
+                        except Exception as e:
+                            logger.error(f"Monitor error [{name}]: {e}")
+                        finally:
+                            try:
+                                from core.metrics import observe_scan
+                                observe_scan(name.lower(), time.time() - _t0)
+                            except Exception:
+                                pass
+                    await _asyncio.gather(*(_run_one(m) for m in monitors),
+                                          return_exceptions=True)
 
-            await asyncio.gather(*(_run_one(m) for m in monitors), return_exceptions=True)
-            await asyncio.sleep(15)
+                loop.run_until_complete(_run_all())
+            except Exception as e:
+                logger.error(f"Monitor cycle error: {e}")
+            finally:
+                loop.close()
+
+            # Sleep between cycles — use regular time.sleep (we're in a thread)
+            import time as _t
+            for _ in range(30):          # 30 x 1s = 30s, checks self.monitoring each second
+                if not self.monitoring:
+                    return
+                _t.sleep(1)
 
     # ══════════════════════════════════════════════════════════════════
     # Threat lifecycle
