@@ -314,16 +314,16 @@ export const addTopologySegment = (cidr: string, type: string, label: string) =>
 export const scanAllNetworks = () => apiFetch<{ results: Record<string, unknown>; total_hosts: number }>("/api/topology/scan", { method: "POST" });
 
 // ── Remote Agents ─────────────────────────────────────────────────────
-export const getAgents      = () => apiFetch<{ agents: Agent[]; stats: AgentStats }>("/api/agents/");
-export const getAgentStats  = () => apiFetch<AgentStats>("/api/agents/stats");
-export const getAgent       = (id: string) => apiFetch<Agent>(`/api/agents/${id}`);
-export const getAgentThreats= (id: string) => apiFetch<{ threats: Threat[] }>(`/api/agents/${id}/threats`);
+export const getAgents      = () => apiFetch<{ agents: Agent[]; stats: AgentStats }>("/api/remote-agents/");
+export const getAgentStats  = () => apiFetch<AgentStats>("/api/remote-agents/stats");
+export const getAgent       = (id: string) => apiFetch<Agent>(`/api/remote-agents/${id}`);
+export const getAgentThreats= (id: string) => apiFetch<{ threats: Threat[] }>(`/api/remote-agents/${id}/threats`);
 export const generateAgentToken = (label: string) =>
-  apiFetch<{ token: string; label: string; usage: string }>("/api/agents/token/generate", {
+  apiFetch<{ token: string; label: string; usage: string }>("/api/remote-agents/token/generate", {
     method: "POST", body: JSON.stringify({ label }),
   });
 export const sendAgentCommand = (id: string, command: string, params: Record<string, unknown> = {}) =>
-  apiFetch<{ sent: boolean }>(`/api/agents/${id}/command`, {
+  apiFetch<{ sent: boolean }>(`/api/remote-agents/${id}/command`, {
     method: "POST", body: JSON.stringify({ command, params }),
   });
 
@@ -372,7 +372,7 @@ export const getKillChain = () => apiFetch<KillChainStatus>("/api/kill-chain");
 export const getDatasetStatus = () => apiFetch<DatasetStatus>("/api/dataset/status");
 
 // ── License ───────────────────────────────────────────────────────────
-export const getLicenseInfo = () => apiFetch<LicenseInfo>("/api/agents/setup/questions");
+export const getLicenseInfo = () => apiFetch<LicenseInfo>("/api/remote-agents/setup/questions");
 
 // ── Security Orchestrator (Autonomous Scans) ────────────────────────
 export const getSecurityTasks = (limit = 50) =>

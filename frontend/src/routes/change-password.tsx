@@ -39,7 +39,7 @@ function ChangePasswordPage() {
       toast.success("Password changed successfully");
       // Refresh profile so must_change_password is cleared in cached state
       await getMe().catch(() => {});
-      void navigate({ to: "/ai-console" });
+      void navigate({ to: "/" });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);

@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ActivityRouteImport } from './routes/activity'
 import { Route as AgentRouteImport } from './routes/agent'
 import { Route as AiAssistantRouteImport } from './routes/ai-assistant'
 import { Route as AiConsoleRouteImport } from './routes/ai-console'
@@ -28,6 +29,7 @@ import { Route as IdentityProtectionRouteImport } from './routes/identity-protec
 import { Route as IdsIpsRouteImport } from './routes/ids-ips'
 import { Route as IncidentResponseRouteImport } from './routes/incident-response'
 import { Route as IncidentsRouteImport } from './routes/incidents'
+import { Route as InvestigationsRouteImport } from './routes/investigations'
 import { Route as JobsRouteImport } from './routes/jobs'
 import { Route as LicenseRouteImport } from './routes/license'
 import { Route as LiveMonitoringRouteImport } from './routes/live-monitoring'
@@ -45,6 +47,7 @@ import { Route as SecurityGatewayRouteImport } from './routes/security-gateway'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SiemRouteImport } from './routes/siem'
 import { Route as SignupRouteImport } from './routes/signup'
+import { Route as SystemRouteImport } from './routes/system'
 import { Route as SystemHealthRouteImport } from './routes/system-health'
 import { Route as ThreatCenterRouteImport } from './routes/threat-center'
 import { Route as ThreatIntelligenceRouteImport } from './routes/threat-intelligence'
@@ -59,6 +62,11 @@ import { Route as InvestigateTypeIdRouteImport } from './routes/investigate.$typ
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ActivityRoute = ActivityRouteImport.update({
+  id: '/activity',
+  path: '/activity',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AgentRoute = AgentRouteImport.update({
@@ -151,6 +159,11 @@ const IncidentsRoute = IncidentsRouteImport.update({
   path: '/incidents',
   getParentRoute: () => rootRouteImport,
 } as any)
+const InvestigationsRoute = InvestigationsRouteImport.update({
+  id: '/investigations',
+  path: '/investigations',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const JobsRoute = JobsRouteImport.update({
   id: '/jobs',
   path: '/jobs',
@@ -236,6 +249,11 @@ const SignupRoute = SignupRouteImport.update({
   path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SystemRoute = SystemRouteImport.update({
+  id: '/system',
+  path: '/system',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SystemHealthRoute = SystemHealthRouteImport.update({
   id: '/system-health',
   path: '/system-health',
@@ -289,6 +307,7 @@ const InvestigateTypeIdRoute = InvestigateTypeIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/activity': typeof ActivityRoute
   '/agent': typeof AgentRoute
   '/ai-assistant': typeof AiAssistantRoute
   '/ai-console': typeof AiConsoleRoute
@@ -307,6 +326,7 @@ export interface FileRoutesByFullPath {
   '/ids-ips': typeof IdsIpsRoute
   '/incident-response': typeof IncidentResponseRoute
   '/incidents': typeof IncidentsRoute
+  '/investigations': typeof InvestigationsRoute
   '/jobs': typeof JobsRoute
   '/license': typeof LicenseRoute
   '/live-monitoring': typeof LiveMonitoringRoute
@@ -324,6 +344,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/siem': typeof SiemRoute
   '/signup': typeof SignupRoute
+  '/system': typeof SystemRoute
   '/system-health': typeof SystemHealthRoute
   '/threat-center': typeof ThreatCenterRoute
   '/threat-intelligence': typeof ThreatIntelligenceRoute
@@ -337,6 +358,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/activity': typeof ActivityRoute
   '/agent': typeof AgentRoute
   '/ai-assistant': typeof AiAssistantRoute
   '/ai-console': typeof AiConsoleRoute
@@ -355,6 +377,7 @@ export interface FileRoutesByTo {
   '/ids-ips': typeof IdsIpsRoute
   '/incident-response': typeof IncidentResponseRoute
   '/incidents': typeof IncidentsRoute
+  '/investigations': typeof InvestigationsRoute
   '/jobs': typeof JobsRoute
   '/license': typeof LicenseRoute
   '/live-monitoring': typeof LiveMonitoringRoute
@@ -372,6 +395,7 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRoute
   '/siem': typeof SiemRoute
   '/signup': typeof SignupRoute
+  '/system': typeof SystemRoute
   '/system-health': typeof SystemHealthRoute
   '/threat-center': typeof ThreatCenterRoute
   '/threat-intelligence': typeof ThreatIntelligenceRoute
@@ -386,6 +410,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/activity': typeof ActivityRoute
   '/agent': typeof AgentRoute
   '/ai-assistant': typeof AiAssistantRoute
   '/ai-console': typeof AiConsoleRoute
@@ -404,6 +429,7 @@ export interface FileRoutesById {
   '/ids-ips': typeof IdsIpsRoute
   '/incident-response': typeof IncidentResponseRoute
   '/incidents': typeof IncidentsRoute
+  '/investigations': typeof InvestigationsRoute
   '/jobs': typeof JobsRoute
   '/license': typeof LicenseRoute
   '/live-monitoring': typeof LiveMonitoringRoute
@@ -421,6 +447,7 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/siem': typeof SiemRoute
   '/signup': typeof SignupRoute
+  '/system': typeof SystemRoute
   '/system-health': typeof SystemHealthRoute
   '/threat-center': typeof ThreatCenterRoute
   '/threat-intelligence': typeof ThreatIntelligenceRoute
@@ -436,6 +463,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/activity'
     | '/agent'
     | '/ai-assistant'
     | '/ai-console'
@@ -454,6 +482,7 @@ export interface FileRouteTypes {
     | '/ids-ips'
     | '/incident-response'
     | '/incidents'
+    | '/investigations'
     | '/jobs'
     | '/license'
     | '/live-monitoring'
@@ -471,6 +500,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/siem'
     | '/signup'
+    | '/system'
     | '/system-health'
     | '/threat-center'
     | '/threat-intelligence'
@@ -484,6 +514,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/activity'
     | '/agent'
     | '/ai-assistant'
     | '/ai-console'
@@ -502,6 +533,7 @@ export interface FileRouteTypes {
     | '/ids-ips'
     | '/incident-response'
     | '/incidents'
+    | '/investigations'
     | '/jobs'
     | '/license'
     | '/live-monitoring'
@@ -519,6 +551,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/siem'
     | '/signup'
+    | '/system'
     | '/system-health'
     | '/threat-center'
     | '/threat-intelligence'
@@ -532,6 +565,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/activity'
     | '/agent'
     | '/ai-assistant'
     | '/ai-console'
@@ -550,6 +584,7 @@ export interface FileRouteTypes {
     | '/ids-ips'
     | '/incident-response'
     | '/incidents'
+    | '/investigations'
     | '/jobs'
     | '/license'
     | '/live-monitoring'
@@ -567,6 +602,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/siem'
     | '/signup'
+    | '/system'
     | '/system-health'
     | '/threat-center'
     | '/threat-intelligence'
@@ -581,6 +617,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ActivityRoute: typeof ActivityRoute
   AgentRoute: typeof AgentRoute
   AiAssistantRoute: typeof AiAssistantRoute
   AiConsoleRoute: typeof AiConsoleRoute
@@ -599,6 +636,7 @@ export interface RootRouteChildren {
   IdsIpsRoute: typeof IdsIpsRoute
   IncidentResponseRoute: typeof IncidentResponseRoute
   IncidentsRoute: typeof IncidentsRoute
+  InvestigationsRoute: typeof InvestigationsRoute
   JobsRoute: typeof JobsRoute
   LicenseRoute: typeof LicenseRoute
   LiveMonitoringRoute: typeof LiveMonitoringRoute
@@ -616,6 +654,7 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   SiemRoute: typeof SiemRoute
   SignupRoute: typeof SignupRoute
+  SystemRoute: typeof SystemRoute
   SystemHealthRoute: typeof SystemHealthRoute
   ThreatCenterRoute: typeof ThreatCenterRoute
   ThreatIntelligenceRoute: typeof ThreatIntelligenceRoute
@@ -635,6 +674,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/activity': {
+      id: '/activity'
+      path: '/activity'
+      fullPath: '/activity'
+      preLoaderRoute: typeof ActivityRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/agent': {
@@ -763,6 +809,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IncidentsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/investigations': {
+      id: '/investigations'
+      path: '/investigations'
+      fullPath: '/investigations'
+      preLoaderRoute: typeof InvestigationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/jobs': {
       id: '/jobs'
       path: '/jobs'
@@ -882,6 +935,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/system': {
+      id: '/system'
+      path: '/system'
+      fullPath: '/system'
+      preLoaderRoute: typeof SystemRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/system-health': {
       id: '/system-health'
       path: '/system-health'
@@ -957,6 +1017,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ActivityRoute: ActivityRoute,
   AgentRoute: AgentRoute,
   AiAssistantRoute: AiAssistantRoute,
   AiConsoleRoute: AiConsoleRoute,
@@ -975,6 +1036,7 @@ const rootRouteChildren: RootRouteChildren = {
   IdsIpsRoute: IdsIpsRoute,
   IncidentResponseRoute: IncidentResponseRoute,
   IncidentsRoute: IncidentsRoute,
+  InvestigationsRoute: InvestigationsRoute,
   JobsRoute: JobsRoute,
   LicenseRoute: LicenseRoute,
   LiveMonitoringRoute: LiveMonitoringRoute,
@@ -992,6 +1054,7 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   SiemRoute: SiemRoute,
   SignupRoute: SignupRoute,
+  SystemRoute: SystemRoute,
   SystemHealthRoute: SystemHealthRoute,
   ThreatCenterRoute: ThreatCenterRoute,
   ThreatIntelligenceRoute: ThreatIntelligenceRoute,

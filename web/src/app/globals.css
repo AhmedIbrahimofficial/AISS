@@ -1,0 +1,129 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #071018;
+  --bg-elevated: #0c1824;
+  --bg-panel: #0f1f2e;
+  --line: rgba(148, 190, 210, 0.12);
+  --text: #e8f1f6;
+  --muted: #8aa4b5;
+  --accent: #2dd4bf;
+  --accent-dim: rgba(45, 212, 191, 0.14);
+  --warn: #f5a524;
+  --danger: #f0435a;
+  --ok: #3ddc97;
+  --hold: #60a5fa;
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --font-sans: var(--font-display);
+  --font-mono: var(--font-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(45, 212, 191, 0.12), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(96, 165, 250, 0.1), transparent 50%),
+    linear-gradient(180deg, #061018 0%, #071018 40%, #050d14 100%);
+  font-family: var(--font-display), system-ui, sans-serif;
+}
+
+::selection {
+  background: rgba(45, 212, 191, 0.35);
+}
+
+.panel {
+  background: linear-gradient(180deg, rgba(15, 31, 46, 0.92), rgba(10, 22, 34, 0.88));
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  backdrop-filter: blur(10px);
+}
+
+.grid-noise {
+  background-image:
+    linear-gradient(rgba(148, 190, 210, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 190, 210, 0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+.mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(45, 212, 191, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 12px rgba(45, 212, 191, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(45, 212, 191, 0);
+  }
+}
+
+.animate-rise {
+  animation: rise 0.55s ease-out both;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: pulse-ring 2s infinite;
+}
+
+.risk-LOW {
+  color: var(--ok);
+}
+.risk-MEDIUM {
+  color: var(--warn);
+}
+.risk-HIGH {
+  color: #ff7a59;
+}
+.risk-CRITICAL {
+  color: var(--danger);
+}
+
+.dec-ALLOW {
+  color: var(--ok);
+  background: rgba(61, 220, 151, 0.12);
+}
+.dec-HOLD {
+  color: var(--hold);
+  background: rgba(96, 165, 250, 0.12);
+}
+.dec-QUARANTINE {
+  color: var(--warn);
+  background: rgba(245, 165, 36, 0.12);
+}
+.dec-BLOCK {
+  color: var(--danger);
+  background: rgba(240, 67, 90, 0.14);
+}

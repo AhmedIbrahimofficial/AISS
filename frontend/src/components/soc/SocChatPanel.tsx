@@ -44,7 +44,7 @@ export function SocChatPanel() {
       right={
         <div className="flex items-center gap-2">
           <Badge tone="info">OpenRouter</Badge>
-          <Link to="/ai-console" className="font-mono text-[0.6rem] text-primary hover:underline">
+          <Link to="/" className="font-mono text-[0.6rem] text-primary hover:underline">
             FULL CONSOLE →
           </Link>
         </div>

@@ -11,7 +11,7 @@ setlocal EnableDelayedExpansion
 
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
-set "BACKEND=%ROOT%\aiss backend"
+set "BACKEND=%ROOT%\backend"
 set "FRONTEND=%ROOT%\frontend"
 set "INSTALLER=%ROOT%\installer"
 set "OUTPUT=%ROOT%\installer\output"

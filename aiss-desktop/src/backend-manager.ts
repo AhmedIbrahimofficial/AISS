@@ -10,7 +10,7 @@ import * as http from "http";
 export type BackendState = "stopped" | "starting" | "running" | "error";
 
 export interface BackendManagerOptions {
-  /** Path to the AISS root directory (contains 'aiss backend' folder) */
+  /** Path to the AISS root directory (contains 'backend' folder) */
   aissRoot: string;
   /** Backend port (default 8000) */
   port?: number;
@@ -57,7 +57,7 @@ export class BackendManager {
    * Find the Python executable — prefer venv, fall back to system python.
    */
   private findPython(): string {
-    const venvPython = join(this.aissRoot, "aiss backend", ".venv", "Scripts", "python.exe");
+    const venvPython = join(this.aissRoot, "backend", ".venv", "Scripts", "python.exe");
     if (existsSync(venvPython)) return venvPython;
     return "python";
   }
@@ -79,7 +79,7 @@ export class BackendManager {
     this.setState("starting", "Launching backend process...");
 
     const python = this.findPython();
-    const backendDir = join(this.aissRoot, "aiss backend");
+    const backendDir = join(this.aissRoot, "backend");
     const mainScript = join(backendDir, "main.py");
 
     if (!existsSync(mainScript)) {

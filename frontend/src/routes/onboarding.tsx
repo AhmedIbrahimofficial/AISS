@@ -385,7 +385,7 @@ function WelcomeStep({ prefs, navigate }: { prefs: any; navigate: any }) {
     localStorage.setItem("aiss_onboarding_done", "1");
     localStorage.setItem("aiss_prefs", JSON.stringify(prefs));
     toast.success("AISS is now protecting your system!", { duration: 4000 });
-    void navigate({ to: "/ai-console" });
+    void navigate({ to: "/" });
   };
 
   return (

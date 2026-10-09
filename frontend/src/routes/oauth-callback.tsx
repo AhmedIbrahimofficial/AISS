@@ -88,7 +88,7 @@ function OAuthCallbackPage() {
             void navigate({ to: "/onboarding" });
           } else {
             localStorage.setItem("aiss_onboarding_done", "1");
-            void navigate({ to: "/ai-console" });
+            void navigate({ to: "/" });
           }
         }, 900);
       } catch (err) {

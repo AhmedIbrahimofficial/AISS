@@ -4,7 +4,7 @@
 
 $ErrorActionPreference = "Stop"
 $ROOT     = $PSScriptRoot
-$BACKEND  = "$ROOT\aiss backend"
+$BACKEND  = "$ROOT\backend"
 $FRONTEND = "$ROOT\frontend"
 $OUTPUT   = "$ROOT\installer\output"
 $PYTHON   = "$BACKEND\.venv\Scripts\python.exe"

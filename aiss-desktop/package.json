@@ -48,7 +48,7 @@
     },
     "extraResources": [
       {
-        "from": "../aiss backend",
+        "from": "../backend",
         "to": "backend",
         "filter": ["**/*", "!**/__pycache__/**", "!**/.venv/**", "!**/node_modules/**"]
       },

@@ -5,6 +5,9 @@ import {
 } from "@tanstack/react-router";
 import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
+import { ApprovalModal } from "@/components/agent/ApprovalModal";
+import agentApi, { type ApprovalRequest } from "@/api/agentApi";
+import { onWSEvent } from "@/lib/api";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -190,6 +193,7 @@ function AppWithWS() {
   const [wizardDismissed, setWizardDismissed] = useState(false);
   const [actionConfirm, setActionConfirm] = useState<ActionConfirm | null>(null);
   const [authed, setAuthed] = useState(false);
+  const [agentApproval, setAgentApproval] = useState<ApprovalRequest | null>(null);
   const authRunning = useRef(false);
 
   const { online } = useBackendStatus();
@@ -206,6 +210,20 @@ function AppWithWS() {
         onCancel: () => { setActionConfirm(null); resolve(false); },
       });
     });
+  }, []);
+
+  // Listen for agent_approval_required events from WebSocket
+  useEffect(() => {
+    const off = onWSEvent((evt) => {
+      if (evt.event === "agent_approval_required" && evt.approval) {
+        setAgentApproval(evt.approval as ApprovalRequest);
+        toast.warning("Action requires your approval", {
+          description: `${(evt.approval as ApprovalRequest).tool_name?.replace(/_/g, " ")} — ${(evt.approval as ApprovalRequest).risk_level}`,
+          duration: 10000,
+        });
+      }
+    });
+    return off;
   }, []);
 
   // ── Auth on mount — always ensure a valid token ───────────────────
@@ -348,6 +366,19 @@ function AppWithWS() {
         />
       )}
       {actionConfirm && <ActionConfirmModal confirm={actionConfirm} />}
+      {agentApproval && (
+        <ApprovalModal
+          approval={agentApproval}
+          onApprove={async (id) => {
+            try { await agentApi.approveAction(id); } catch { /* ignore */ }
+            setAgentApproval(null);
+          }}
+          onReject={async (id) => {
+            try { await agentApi.rejectAction(id); } catch { /* ignore */ }
+            setAgentApproval(null);
+          }}
+        />
+      )}
     </>
   );
 }

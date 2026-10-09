@@ -73,7 +73,7 @@ function SignupPage() {
         void navigate({ to: "/change-password" });
       } else {
         toast.success("Welcome to AISS");
-        void navigate({ to: "/ai-console" });
+        void navigate({ to: "/" });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

@@ -1,171 +1,224 @@
 /**
  * ApprovalModal — human-in-the-loop approval gate for HIGH/CRITICAL operations
- * Requirements: 4.2, 4.4, 4.5, 4.6
+ * Redesigned to match AISS design system and make approval feel like a serious
+ * security decision, not a random dialog.
  */
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import {
+  AlertTriangle, Clock, CheckCircle2, XCircle,
+  Shield, FileText, Zap, Lock,
+} from "lucide-react";
 import type { ApprovalRequest } from "../../api/agentApi";
 
 interface ApprovalModalProps {
   approval: ApprovalRequest | null;
   onApprove: (id: string) => void;
-  onReject: (id: string) => void;
+  onReject:  (id: string) => void;
 }
 
-function RiskBadge({ level }: { level: string }) {
-  const styles: Record<string, string> = {
-    HIGH:     "bg-orange-500/20 text-orange-300 border border-orange-500/40",
-    CRITICAL: "bg-red-600/20 text-red-300 border border-red-600/40",
-    MEDIUM:   "bg-yellow-500/20 text-yellow-300 border border-yellow-500/40",
-    LOW:      "bg-green-500/20 text-green-300 border border-green-500/40",
-  };
-  return (
-    <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${styles[level] ?? styles["LOW"]}`}>
-      {level}
-    </span>
-  );
+// What will happen — step list based on tool name
+const IMPACT_STEPS: Record<string, string[]> = {
+  quarantine_file:      ["File will be suspended", "Moved to encrypted quarantine", "Original location cleared", "Hash logged to audit trail"],
+  kill_process:         ["Process will be suspended", "Forensic evidence collected", "Child processes identified", "Process tree terminated"],
+  block_ip:             ["IP blocked via Windows Firewall", "Inbound + outbound rules added", "24-hour auto-expiry set", "Audit entry created"],
+  terminate_process:    ["Process suspended immediately", "Open file handles closed", "Memory snapshot captured", "Process killed"],
+  emergency_ransomware: ["Shadow copy deletion killed", "Affected processes terminated", "Admin alert sent", "Incident record created"],
+};
+
+function getImpactSteps(toolName: string): string[] {
+  const key = Object.keys(IMPACT_STEPS).find(k => toolName.toLowerCase().includes(k));
+  return key ? IMPACT_STEPS[key]! : [
+    "Operation will execute immediately",
+    "Changes will be logged in audit trail",
+    "Action can be reviewed in Investigations",
+  ];
 }
 
 export function ApprovalModal({ approval, onApprove, onReject }: ApprovalModalProps) {
   const [secondsLeft, setSecondsLeft] = useState(3600);
-  const [isActing, setIsActing] = useState(false);
-  const [expired, setExpired] = useState(false);
+  const [isActing,    setIsActing]    = useState(false);
+  const [expired,     setExpired]     = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const approveRef = useRef<HTMLButtonElement>(null);
+  const approveRef  = useRef<HTMLButtonElement>(null);
 
-  // Reset timer whenever approval changes
   useEffect(() => {
     if (!approval) return;
     setSecondsLeft(3600);
     setExpired(false);
     setIsActing(false);
-    approveRef.current?.focus();
+    setTimeout(() => approveRef.current?.focus(), 100);
 
     intervalRef.current = setInterval(() => {
-      setSecondsLeft((s) => {
-        if (s <= 1) {
-          clearInterval(intervalRef.current!);
-          setExpired(true);
-          return 0;
-        }
+      setSecondsLeft(s => {
+        if (s <= 1) { clearInterval(intervalRef.current!); setExpired(true); return 0; }
         return s - 1;
       });
     }, 1000);
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [approval?.id]);
 
   if (!approval) return null;
 
-  const handleApprove = async () => {
+  const isCritical = approval.risk_level === "CRITICAL";
+  const color      = isCritical ? "var(--critical)" : "#f97316";
+  const colorBg    = isCritical ? "rgba(220,38,38,0.08)" : "rgba(249,115,22,0.08)";
+  const colorBorder= isCritical ? "rgba(220,38,38,0.3)"  : "rgba(249,115,22,0.3)";
+
+  const formatTime = (secs: number) =>
+    `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+
+  const impactSteps = getImpactSteps(approval.tool_name);
+
+  const handleApprove = () => {
     if (isActing || expired) return;
     setIsActing(true);
     try { onApprove(approval.id); } finally { setIsActing(false); }
   };
 
-  const handleReject = async () => {
+  const handleReject = () => {
     if (isActing) return;
     setIsActing(true);
     try { onReject(approval.id); } finally { setIsActing(false); }
   };
 
-  const formatTime = (secs: number) => {
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${m}:${String(s).padStart(2, "0")}`;
-  };
-
   return (
-    /* Backdrop */
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="approval-title"
     >
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+
+      {/* Modal */}
       <div
-        className={`w-full max-w-lg mx-4 rounded-2xl shadow-2xl border ${
-          approval.risk_level === "CRITICAL"
-            ? "bg-gray-950 border-red-700/60"
-            : "bg-gray-950 border-orange-600/50"
-        } p-6`}
+        className="relative w-full max-w-md rounded-2xl border shadow-2xl overflow-hidden"
+        style={{ borderColor: colorBorder, background: "#0a1410" }}
       >
+        {/* Top accent bar */}
+        <div className="h-0.5 w-full" style={{ background: `linear-gradient(90deg, ${color}, transparent)` }} />
+
         {/* Header */}
-        <div className="flex items-start gap-3 mb-5">
-          <div className={`mt-0.5 p-2 rounded-lg ${approval.risk_level === "CRITICAL" ? "bg-red-600/20" : "bg-orange-500/20"}`}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-              className={approval.risk_level === "CRITICAL" ? "text-red-400" : "text-orange-400"}>
-              <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-              <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
-            </svg>
+        <div className="flex items-start gap-3 px-5 pt-5 pb-4 border-b border-[var(--hairline)]"
+          style={{ background: colorBg }}>
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border"
+            style={{ borderColor: colorBorder, background: `${color}15` }}>
+            {isCritical
+              ? <Lock className="size-5" style={{ color }} />
+              : <AlertTriangle className="size-5" style={{ color }} />}
           </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-mono text-[0.65rem] font-bold tracking-widest uppercase"
+              style={{ color }}>
+              {isCritical ? "⚠ CRITICAL ACTION — REQUIRES APPROVAL" : "⚠ HIGH RISK ACTION — REQUIRES APPROVAL"}
+            </p>
+            <h2 id="approval-title" className="mt-0.5 text-base font-semibold text-foreground">
+              {approval.tool_name.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+            </h2>
+          </div>
+          <span
+            className="shrink-0 rounded-md border px-2 py-0.5 font-mono text-[0.62rem] font-bold"
+            style={{ color, borderColor: colorBorder }}>
+            {approval.risk_level}
+          </span>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          {/* Reason */}
           <div>
-            <h2 id="approval-title" className="text-base font-bold text-white">Approval Required</h2>
-            <p className="text-xs text-gray-400 mt-0.5">This operation requires your explicit authorisation</p>
+            <p className="label-cap text-[0.6rem] mb-1.5">AI detected</p>
+            <p className="text-sm text-foreground leading-relaxed">{approval.description}</p>
           </div>
-          <div className="ml-auto">
-            <RiskBadge level={approval.risk_level} />
-          </div>
-        </div>
 
-        {/* Details */}
-        <div className="space-y-3 mb-5">
-          <DetailRow label="Operation" value={approval.tool_name} mono />
-          <DetailRow label="What will happen" value={approval.description} />
-          <DetailRow label="Why it is required" value={approval.reason} />
+          {/* Why needed */}
+          <div>
+            <p className="label-cap text-[0.6rem] mb-1.5">Why this action</p>
+            <p className="text-[0.78rem] text-muted-foreground leading-relaxed">{approval.reason}</p>
+          </div>
+
+          {/* Affected resource */}
           {approval.affected_resource && (
-            <DetailRow label="Affected resource" value={approval.affected_resource} mono />
+            <div className="flex items-start gap-2 rounded-lg border border-[var(--hairline)] bg-white/3 px-3 py-2.5">
+              <Shield className="size-3.5 shrink-0 mt-0.5 text-muted-foreground" />
+              <div>
+                <p className="text-[0.6rem] text-muted-foreground mb-0.5 label-cap">Affected resource</p>
+                <p className="font-mono text-xs">{approval.affected_resource}</p>
+              </div>
+            </div>
           )}
-          {approval.estimated_impact && (
-            <DetailRow label="Estimated impact" value={approval.estimated_impact} />
-          )}
+
+          {/* What will happen */}
+          <div className="rounded-xl border px-4 py-3" style={{ borderColor: colorBorder, background: colorBg }}>
+            <p className="label-cap text-[0.6rem] mb-2.5" style={{ color }}>What will happen</p>
+            <div className="space-y-1.5">
+              {impactSteps.map((step, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <CheckCircle2 className="size-3.5 shrink-0" style={{ color }} />
+                  <span className="text-[0.78rem] text-foreground">{step}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Countdown */}
+          <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs ${
+            expired
+              ? "border border-[var(--critical)]/30 bg-[var(--critical)]/8 text-[var(--critical)]"
+              : secondsLeft < 300
+              ? "border border-[var(--warning)]/30 bg-[var(--warning)]/8 text-[var(--warning)]"
+              : "border border-[var(--hairline)] bg-white/3 text-muted-foreground"
+          }`}>
+            <Clock className="size-3.5 shrink-0" />
+            {expired
+              ? "Approval window has expired — operation cancelled"
+              : <span>Auto-expires in <span className="font-mono font-bold text-foreground ml-1">{formatTime(secondsLeft)}</span></span>
+            }
+          </div>
         </div>
 
-        {/* Countdown */}
-        <div className={`flex items-center gap-2 text-xs mb-5 px-3 py-2 rounded-lg ${
-          expired ? "bg-red-900/30 text-red-300" : "bg-gray-800 text-gray-400"
-        }`}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
-          </svg>
-          {expired
-            ? "Approval window expired"
-            : <>Auto-expires in <span className="font-mono font-bold text-white ml-1">{formatTime(secondsLeft)}</span></>
-          }
-        </div>
-
-        {expired ? (
-          <p className="text-center text-sm text-gray-500 italic">This approval has expired and the operation was cancelled.</p>
-        ) : (
-          <div className="flex gap-3">
+        {/* Actions */}
+        {!expired ? (
+          <div className="flex gap-3 border-t border-[var(--hairline)] px-5 py-4">
+            <button
+              onClick={handleReject}
+              disabled={isActing}
+              className="flex-1 flex items-center justify-center gap-2 rounded-xl border border-[var(--hairline)] bg-white/4 px-4 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:border-[var(--critical)]/40 hover:bg-[var(--critical)]/8 hover:text-[var(--critical)] disabled:opacity-50"
+            >
+              <XCircle className="size-4" /> Cancel
+            </button>
             <button
               ref={approveRef}
               onClick={handleApprove}
               disabled={isActing}
-              className="flex-1 py-2.5 rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white font-semibold text-sm transition-colors"
+              className="flex-1 flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-all disabled:opacity-50"
+              style={{
+                borderColor: colorBorder,
+                background: `${color}18`,
+                color,
+              }}
             >
-              {isActing ? "Processing…" : "✓ Approve"}
-            </button>
-            <button
-              onClick={handleReject}
-              disabled={isActing}
-              className="flex-1 py-2.5 rounded-xl bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white font-semibold text-sm transition-colors"
-            >
-              ✕ Reject
+              {isActing
+                ? <><span className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" /> Processing…</>
+                : <><CheckCircle2 className="size-4" /> Approve Action</>
+              }
             </button>
           </div>
+        ) : (
+          <div className="border-t border-[var(--hairline)] px-5 py-4">
+            <p className="text-center text-sm text-muted-foreground">
+              This approval has expired. The operation was not executed.
+            </p>
+          </div>
         )}
-      </div>
-    </div>
-  );
-}
 
-function DetailRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="bg-gray-900 rounded-lg px-3 py-2.5">
-      <p className="text-xs text-gray-500 mb-0.5">{label}</p>
-      <p className={`text-sm text-gray-200 ${mono ? "font-mono" : ""}`}>{value}</p>
+        {/* Audit note */}
+        <div className="border-t border-[var(--hairline)] px-5 py-2.5 bg-white/2">
+          <p className="text-center font-mono text-[0.55rem] text-muted-foreground">
+            This action will be recorded in the AISS immutable audit trail
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
