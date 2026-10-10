@@ -356,20 +356,11 @@ async def lifespan(app: FastAPI):
 
     # â”€â”€ Startup box â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    # Auto-start monitoring on server startup (no WebSocket client required)
-    # This ensures threat detection runs from the moment the server starts,
-    # not only when a browser connects and sends {action: "start_monitoring"}.
-    # Blocking calls inside the monitors are now offloaded to thread pools and
-    # the monitor loop runs each monitor concurrently with a per-scan timeout.
-    async def _auto_start_monitoring():
-        await asyncio.sleep(3)   # let DB + modules initialize first
-        try:
-            await threat_engine.start_monitoring()
-            logger.info("Shield: Auto-monitoring STARTED on server startup")
-        except Exception as e:
-            logger.warning(f"Auto-monitoring start failed: {e}")
-
-    asyncio.create_task(_auto_start_monitoring())
+    # Auto-monitoring is NOT auto-started on startup.
+    # The scan loop is CPU-intensive and would block HTTP requests.
+    # Start monitoring manually from the dashboard or via WebSocket:
+    #   {action: "start_monitoring"}
+    logger.info("Shield: Monitoring ready — start from dashboard when needed")
 
     print_startup_box(threat_engine)
 
